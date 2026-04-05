@@ -11,6 +11,7 @@ const referenceRoutes = require("./routes/referenceRoutes");
 const recommendationRoutes = require("./routes/recommendationRoutes");
 const gstRoutes = require("./routes/gstRoutes");
 const tallyRoutes = require("./routes/tallyRoutes");
+const connectorRoutes = require("./routes/connectorRoutes");
 
 const app = express();
 
@@ -31,6 +32,7 @@ app.use("/api/bank-statements", bankStatementRoutes);
 app.use("/api/recommendations", recommendationRoutes);
 app.use("/api/gst", gstRoutes);
 app.use("/api/tally", tallyRoutes);
+app.use("/api", connectorRoutes);
 
 const clientDistPath = path.resolve(__dirname, "../../client/dist");
 

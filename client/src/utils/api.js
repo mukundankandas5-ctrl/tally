@@ -49,7 +49,7 @@ export async function fetchClients() {
 }
 
 export async function fetchTallyStatus() {
-  return fetchJson("/api/tally/status");
+  return fetchJson("/api/tally-status");
 }
 
 export async function uploadInvoice(file) {
@@ -90,6 +90,14 @@ export async function pushBankStatementToTally(statement, config) {
   });
 }
 
+export async function pushXmlToTally(xml) {
+  return fetchJson("/api/tally/push-xml", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ xml }),
+  });
+}
+
 export async function analyzeRecommendations(file) {
   const formData = new FormData();
   formData.append("file", file);
@@ -118,5 +126,27 @@ export async function testTallyConnection(config) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
+  });
+}
+
+export async function createPairingCode() {
+  return fetchJson("/api/pair-device", {
+    method: "POST",
+  });
+}
+
+export async function reviseBankStatement(statement, userInstructions) {
+  return fetchJson("/api/bank-statements/revise", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ statement, userInstructions }),
+  });
+}
+
+export async function reviseInvoice(invoice, userInstructions) {
+  return fetchJson("/api/invoices/revise", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ invoice, userInstructions }),
   });
 }

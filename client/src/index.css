@@ -1,36 +1,26 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
   font-family: "Inter", sans-serif;
-  --bg: #0a0f1e;
-  --bg-soft: #10182f;
-  --card: #ffffff;
-  --card-border: rgba(148, 163, 184, 0.16);
-  --text: #e2e8f0;
 }
 
-html {
-  background: #0a0f1e;
+html,
+body,
+#root {
+  min-height: 100%;
 }
 
 body {
   margin: 0;
-  min-height: 100vh;
-  background:
-    radial-gradient(circle at top left, rgba(59, 130, 246, 0.18), transparent 24%),
-    radial-gradient(circle at top right, rgba(15, 23, 42, 0.75), transparent 36%),
-    linear-gradient(180deg, #0a0f1e 0%, #0d1326 48%, #111933 100%);
-  color: var(--text);
+  background: #ffffff;
+  color: #111827;
   font-family: "Inter", sans-serif;
-}
-
-#root {
-  min-height: 100vh;
+  font-weight: 400;
 }
 
 * {
@@ -44,9 +34,43 @@ textarea {
   font: inherit;
 }
 
-.bg-app {
-  background:
-    radial-gradient(circle at 20% 0%, rgba(59, 130, 246, 0.14), transparent 20%),
-    radial-gradient(circle at 80% 10%, rgba(15, 23, 42, 0.6), transparent 24%),
-    linear-gradient(180deg, #0a0f1e 0%, #0d1428 100%);
+.settings-input {
+  @apply h-10 w-full rounded-lg border border-[#D1D5DB] bg-white px-3 text-sm text-[#111827] outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF];
+}
+
+.row-flash {
+  animation: rowFlash 300ms ease-out;
+}
+
+.fade-in {
+  animation: fadeIn 220ms ease-out;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@keyframes rowFlash {
+  0% {
+    background: #f5f3ff;
+  }
+  100% {
+    background: #ffffff;
+  }
+}
+
+@keyframes fadeIn {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
