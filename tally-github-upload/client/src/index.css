@@ -1,0 +1,54 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --bg: #f4f1ea;
+  --surface: rgba(255, 255, 255, 0.9);
+  --border: rgba(15, 23, 42, 0.08);
+  --text: #0f172a;
+  --muted: #475569;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(214, 200, 175, 0.45), transparent 30%),
+    radial-gradient(circle at top right, rgba(15, 118, 110, 0.14), transparent 24%),
+    linear-gradient(180deg, #f4f1ea 0%, #eef5f4 100%);
+  color: var(--text);
+  font-family: "IBM Plex Sans", sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.font-display {
+  font-family: "Fraunces", serif;
+}
+
+.panel-blur {
+  background: var(--surface);
+  backdrop-filter: blur(16px);
+}
+
+.input-base {
+  @apply w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 shadow-sm transition duration-200 placeholder:text-slate-400 focus:border-sea focus:outline-none focus:ring-4 focus:ring-teal-100;
+}
+
+.label-base {
+  @apply mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500;
+}
+
+.table-cell {
+  @apply border-b border-slate-200 px-3 py-3 align-top text-sm text-slate-700;
+}
+
+.table-head {
+  @apply px-3 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500;
+}
