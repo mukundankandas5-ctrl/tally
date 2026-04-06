@@ -400,20 +400,6 @@ function TallyStatusBadge({ onConnectClick, onStatus }) {
     };
   }, []);
 
-  useEffect(() => {
-    if (!activeClient) return;
-    setBankProcessingConfig((current) => ({
-      ...current,
-      clientId: activeClient.id,
-      companyName: activeClient.tallyCompanyName || activeClient.name,
-      bankName: activeClient.bankName || current.bankName,
-    }));
-    setDocumentForm((current) => ({
-      ...current,
-      clientId: current.clientId || activeClient.id,
-    }));
-  }, [activeClient?.id]);
-
   const dot = status.tallyConnected ? "bg-[#16A34A]" : status.connectorConnected ? "bg-[#D97706]" : "bg-[#DC2626]";
   const label = status.tallyConnected
     ? `TallyPrime: Connected — ${status.tallyCompany || "Company"}`
@@ -1248,6 +1234,20 @@ export default function App() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeClient) return;
+    setBankProcessingConfig((current) => ({
+      ...current,
+      clientId: activeClient.id,
+      companyName: activeClient.tallyCompanyName || activeClient.name,
+      bankName: activeClient.bankName || current.bankName,
+    }));
+    setDocumentForm((current) => ({
+      ...current,
+      clientId: current.clientId || activeClient.id,
+    }));
+  }, [activeClient]);
 
   function addToast(message, tone = "info", duration = 2400) {
     const id = createId();
