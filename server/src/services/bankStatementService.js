@@ -118,7 +118,7 @@ function buildSummary(payload, transactions) {
   };
 }
 
-async function analyzeBankStatement(file, userInstructions = "") {
+async function analyzeBankStatement(file, userInstructions = "", context = {}) {
   if (!file) {
     throw new AppError("Please upload a bank statement PDF.", 400);
   }
@@ -141,7 +141,7 @@ async function analyzeBankStatement(file, userInstructions = "") {
 
   const ledgerOptions = ledgerHeads.map((ledger) => ledger.name).join(", ");
   const safeInstructions = sanitizeUserInstructions(userInstructions);
-  const learningSummary = getLearningSummary();
+  const learningSummary = getLearningSummary(context);
 
   const structured = await requestStructuredJson({
     systemPrompt: [
@@ -212,9 +212,8 @@ async function analyzeBankStatement(file, userInstructions = "") {
     ],
   });
 
-  const transactions = applyLearnedMappings(
-    normalizeTransactions(structured, defaultVoucherLedgers.bankLedgerName)
-  );
+  const bankLedgerName = cleanString(context.bankLedgerName || defaultVoucherLedgers.bankLedgerName);
+  const transactions = applyLearnedMappings(normalizeTransactions(structured, bankLedgerName), context);
 
   return {
     confidence: normalizeConfidence(structured.confidence),
@@ -224,14 +223,16 @@ async function analyzeBankStatement(file, userInstructions = "") {
       .map((note) => cleanString(note))
       .filter(Boolean),
     tallyConfig: {
-      companyName: "",
-      bankLedgerName: defaultVoucherLedgers.bankLedgerName,
+      companyName: cleanString(context.companyName),
+      clientId: cleanString(context.clientId),
+      bankName: cleanString(context.bankName),
+      bankLedgerName,
     },
     learningSummary,
   };
 }
 
-async function reviseBankStatement(statement, userInstructions = "") {
+async function reviseBankStatement(statement, userInstructions = "", context = {}) {
   const safeInstructions = sanitizeUserInstructions(userInstructions);
 
   if (!safeInstructions) {
@@ -306,7 +307,10 @@ async function reviseBankStatement(statement, userInstructions = "") {
     maxTokens: 8192,
   });
 
-  const revisedTransactions = applyLearnedMappings(normalizeTransactions(structured, bankLedgerName));
+  const revisedTransactions = applyLearnedMappings(normalizeTransactions(structured, bankLedgerName), {
+    clientId: context.clientId || statement?.tallyConfig?.clientId,
+    bankName: context.bankName || statement?.tallyConfig?.bankName,
+  });
 
   return {
     confidence: normalizeConfidence(structured.confidence),
@@ -318,8 +322,13 @@ async function reviseBankStatement(statement, userInstructions = "") {
     tallyConfig: {
       ...normalizedStatement.tallyConfig,
       ...(structured.tallyConfig || {}),
+      clientId: cleanString(context.clientId || normalizedStatement.tallyConfig.clientId),
+      bankName: cleanString(context.bankName || normalizedStatement.tallyConfig.bankName),
     },
-    learningSummary: getLearningSummary(),
+    learningSummary: getLearningSummary({
+      clientId: context.clientId || normalizedStatement.tallyConfig.clientId,
+      bankName: context.bankName || normalizedStatement.tallyConfig.bankName,
+    }),
   };
 }
 

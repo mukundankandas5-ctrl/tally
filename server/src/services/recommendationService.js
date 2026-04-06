@@ -89,7 +89,7 @@ async function requestAiSuggestions(rows) {
   }
 }
 
-async function analyzeRecommendations(file) {
+async function analyzeRecommendations(file, context = {}) {
   const rows = readWorkbookRows(file);
   const normalizedRows = rows
     .map((row, index) => {
@@ -122,7 +122,7 @@ async function analyzeRecommendations(file) {
 
   const aiById = new Map(aiSuggestions.map((suggestion) => [suggestion.id, suggestion]));
   const mappings = normalizedRows.map((row) => {
-    const learned = getLearnedRuleForNarration(row.description);
+    const learned = getLearnedRuleForNarration(row.description, context);
     const heuristic = heuristicMapping(row.description, row.debit, row.credit);
     const ai = aiById.get(row.id);
 
@@ -155,9 +155,11 @@ async function analyzeRecommendations(file) {
       needsReviewCount: mappings.filter((item) => item.suggestion.confidence === "low").length,
     },
     mappings,
-    learningSummary: getLearningSummary(),
+    learningSummary: getLearningSummary(context),
     tallyConfig: {
-      companyName: "",
+      companyName: cleanString(context.companyName),
+      clientId: cleanString(context.clientId),
+      bankName: cleanString(context.bankName),
       bankLedgerName: defaultVoucherLedgers.bankLedgerName,
     },
   };

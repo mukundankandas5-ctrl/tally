@@ -12,7 +12,11 @@ const upload = multer({
 
 router.post("/analyze", upload.single("file"), async (req, res, next) => {
   try {
-    const result = await analyzeRecommendations(req.file);
+    const result = await analyzeRecommendations(req.file, {
+      clientId: req.body?.clientId,
+      bankName: req.body?.bankName,
+      companyName: req.body?.companyName,
+    });
     res.json(result);
   } catch (error) {
     next(error);

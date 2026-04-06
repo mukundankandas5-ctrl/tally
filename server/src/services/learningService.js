@@ -67,20 +67,29 @@ function buildNarrationSignature(narration) {
   return tokenizeNarration(narration).slice(0, 6).join("|");
 }
 
-function getLearningSummary() {
+function buildScope(clientId = "", bankName = "") {
+  const safeClient = cleanString(clientId).toLowerCase() || "global";
+  const safeBank = cleanString(bankName).toLowerCase() || "all-banks";
+  return `${safeClient}::${safeBank}`;
+}
+
+function getLearningSummary(scopeConfig = {}) {
   const memory = loadMemory();
+  const scope = buildScope(scopeConfig.clientId, scopeConfig.bankName);
+  const scopedRules = Object.values(memory.rules || {}).filter((rule) => (rule.scope || "global::all-banks") === scope);
   return {
-    learnedRuleCount: Object.keys(memory.rules || {}).length,
+    learnedRuleCount: scopedRules.length,
     recentInstructions: (memory.instructionHistory || []).slice(0, 3),
   };
 }
 
-function applyLearnedMappings(transactions) {
+function applyLearnedMappings(transactions, scopeConfig = {}) {
   const memory = loadMemory();
+  const scope = buildScope(scopeConfig.clientId, scopeConfig.bankName);
 
   return (Array.isArray(transactions) ? transactions : []).map((transaction) => {
     const signature = buildNarrationSignature(transaction.narration);
-    const learnedRule = signature ? memory.rules?.[signature] : null;
+    const learnedRule = signature ? memory.rules?.[`${scope}::${signature}`] || memory.rules?.[signature] : null;
 
     if (!learnedRule) {
       return transaction;
@@ -97,15 +106,17 @@ function applyLearnedMappings(transactions) {
   });
 }
 
-function getLearnedRuleForNarration(narration) {
+function getLearnedRuleForNarration(narration, scopeConfig = {}) {
   const memory = loadMemory();
   const signature = buildNarrationSignature(narration);
-  return signature ? memory.rules?.[signature] || null : null;
+  const scope = buildScope(scopeConfig.clientId, scopeConfig.bankName);
+  return signature ? memory.rules?.[`${scope}::${signature}`] || memory.rules?.[signature] || null : null;
 }
 
-function learnFromStatement(statement, userInstructions = "") {
+function learnFromStatement(statement, userInstructions = "", scopeConfig = {}) {
   const memory = loadMemory();
   const transactions = Array.isArray(statement?.transactions) ? statement.transactions : [];
+  const scope = buildScope(scopeConfig.clientId || statement?.tallyConfig?.clientId, scopeConfig.bankName || statement?.tallyConfig?.bankName);
 
   transactions.forEach((transaction) => {
     const signature = buildNarrationSignature(transaction.narration);
@@ -117,14 +128,17 @@ function learnFromStatement(statement, userInstructions = "") {
       return;
     }
 
-    const existing = memory.rules?.[signature] || {
+    const ruleKey = `${scope}::${signature}`;
+    const existing = memory.rules?.[ruleKey] || {
       signature,
+      scope,
       observations: 0,
       sampleNarration: cleanString(transaction.narration),
     };
 
-    memory.rules[signature] = {
+    memory.rules[ruleKey] = {
       ...existing,
+      scope,
       sampleNarration: cleanString(transaction.narration),
       ledgerHead: cleanString(transaction.ledgerHead),
       voucherType: cleanString(transaction.voucherType),

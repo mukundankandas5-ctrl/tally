@@ -84,6 +84,16 @@ function amountDiff(first, second) {
 async function reconcileGstFiles(gstr2bFile, purchaseRegisterFile) {
   const gstrRows = (await readRows(gstr2bFile)).map(normalizeRow).filter((row) => row.invoiceNumber);
   const purchaseRows = (await readRows(purchaseRegisterFile)).map(normalizeRow).filter((row) => row.invoiceNumber);
+  const seenPurchaseKeys = new Set();
+  const duplicatePurchaseKeys = new Set();
+
+  purchaseRows.forEach((row) => {
+    const key = `${row.invoiceNumber.toLowerCase()}|${row.gstin.toLowerCase()}`;
+    if (seenPurchaseKeys.has(key)) {
+      duplicatePurchaseKeys.add(key);
+    }
+    seenPurchaseKeys.add(key);
+  });
 
   const purchaseByKey = new Map(
     purchaseRows.map((row) => [`${row.invoiceNumber.toLowerCase()}|${row.gstin.toLowerCase()}`, row])
@@ -99,12 +109,15 @@ async function reconcileGstFiles(gstr2bFile, purchaseRegisterFile) {
         status: "unmatched",
         mismatchReason: "Invoice not found in purchase register.",
         purchaseRow: null,
+        riskBucket: "Missing In Purchase Register",
       };
     }
 
     const totalDiff = amountDiff(gstrRow.totalAmount, purchaseRow.totalAmount);
     const taxDiff = amountDiff(gstrRow.totalTax, purchaseRow.totalTax);
     const status = totalDiff <= 1 && taxDiff <= 1 ? "matched" : "partial";
+    const duplicateFlag = duplicatePurchaseKeys.has(key);
+    const missingGstin = !gstrRow.gstin || !purchaseRow.gstin;
 
     return {
       ...gstrRow,
@@ -114,15 +127,31 @@ async function reconcileGstFiles(gstr2bFile, purchaseRegisterFile) {
           ? "Values match within tolerance."
           : `Value mismatch. Total diff ${totalDiff.toFixed(2)}, tax diff ${taxDiff.toFixed(2)}.`,
       purchaseRow,
+      riskBucket: duplicateFlag
+        ? "Duplicate Invoice"
+        : missingGstin
+          ? "Missing GSTIN"
+          : status === "matched"
+            ? "Ready To File"
+            : "Value Mismatch",
     };
   });
 
+  const exactMatches = results.filter((row) => row.status === "matched").length;
+  const partialRows = results.filter((row) => row.status === "partial").length;
+  const unmatchedRows = results.filter((row) => row.status === "unmatched").length;
+  const duplicateInvoices = results.filter((row) => row.riskBucket === "Duplicate Invoice").length;
+  const missingGstinCount = results.filter((row) => row.riskBucket === "Missing GSTIN").length;
+
   return {
     summary: {
-      matched: results.filter((row) => row.status === "matched").length,
-      partial: results.filter((row) => row.status === "partial").length,
-      unmatched: results.filter((row) => row.status === "unmatched").length,
+      matched: exactMatches,
+      partial: partialRows,
+      unmatched: unmatchedRows,
+      duplicateInvoices,
+      missingGstin: missingGstinCount,
       total: results.length,
+      exactMatchRate: results.length ? Number(((exactMatches / results.length) * 100).toFixed(1)) : 0,
     },
     rows: results,
   };
@@ -156,6 +185,9 @@ function buildGstWorkbook(report = {}) {
         Matched: toNumber(report.summary?.matched, 0),
         Partial: toNumber(report.summary?.partial, 0),
         Unmatched: toNumber(report.summary?.unmatched, 0),
+        DuplicateInvoices: toNumber(report.summary?.duplicateInvoices, 0),
+        MissingGSTIN: toNumber(report.summary?.missingGstin, 0),
+        ExactMatchRate: `${toNumber(report.summary?.exactMatchRate, 0)}%`,
         Total: toNumber(report.summary?.total, 0),
       },
     ]),

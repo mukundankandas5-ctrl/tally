@@ -48,6 +48,32 @@ export async function fetchClients() {
   return fetchJson("/api/reference/clients");
 }
 
+export async function createClient(payload) {
+  return fetchJson("/api/reference/clients", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchDocumentRequests() {
+  return fetchJson("/api/reference/document-requests");
+}
+
+export async function createDocumentRequest(payload) {
+  return fetchJson("/api/reference/document-requests", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function completeDocumentRequest(id) {
+  return fetchJson(`/api/reference/document-requests/${id}/complete`, {
+    method: "POST",
+  });
+}
+
 export async function fetchAuthUsers() {
   return fetchJson("/api/auth/users");
 }
@@ -88,9 +114,14 @@ export async function fetchTallyStatus() {
   return fetchJson("/api/tally-status");
 }
 
-export async function uploadInvoice(file) {
+export async function uploadInvoice(file, payload = {}) {
   const formData = new FormData();
   formData.append("file", file);
+  Object.entries(payload).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      formData.append(key, value);
+    }
+  });
   return postForm("/api/invoices/extract", formData);
 }
 
@@ -107,10 +138,26 @@ export async function pushInvoiceToTally(invoice, config) {
   });
 }
 
-export async function uploadBankStatement(file) {
+export async function uploadBankStatement(file, payload = {}) {
   const formData = new FormData();
   formData.append("file", file);
+  Object.entries(payload).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      formData.append(key, value);
+    }
+  });
   return postForm("/api/bank-statements/analyze", formData);
+}
+
+export async function uploadBankStatementsBulk(files, payload = {}) {
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+  Object.entries(payload).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      formData.append(key, value);
+    }
+  });
+  return postForm("/api/bank-statements/analyze-bulk", formData);
 }
 
 export async function downloadBankStatementXml(payload) {
@@ -134,9 +181,14 @@ export async function pushXmlToTally(xml) {
   });
 }
 
-export async function analyzeRecommendations(file) {
+export async function analyzeRecommendations(file, payload = {}) {
   const formData = new FormData();
   formData.append("file", file);
+  Object.entries(payload).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      formData.append(key, value);
+    }
+  });
   return postForm("/api/recommendations/analyze", formData);
 }
 
@@ -173,6 +225,14 @@ export async function createPairingCode() {
 
 export async function reviseBankStatement(statement, userInstructions) {
   return fetchJson("/api/bank-statements/revise", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ statement, userInstructions }),
+  });
+}
+
+export async function learnBankStatement(statement, userInstructions = "") {
+  return fetchJson("/api/bank-statements/learn", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ statement, userInstructions }),

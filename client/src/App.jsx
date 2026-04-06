@@ -27,11 +27,16 @@ import { List } from "react-window";
 import * as XLSX from "xlsx";
 import {
   analyzeRecommendations,
+  completeDocumentRequest,
+  createClient,
   createPairingCode,
+  createDocumentRequest,
   downloadRecommendationXml,
   fetchClients,
+  fetchDocumentRequests,
   fetchLedgers,
   fetchTallyStatus,
+  learnBankStatement,
   loginUser,
   pushBankStatementToTally,
   pushInvoiceToTally,
@@ -43,6 +48,7 @@ import {
   reviseInvoice,
   signupUser,
   testTallyConnection,
+  uploadBankStatementsBulk,
   uploadBankStatement,
   uploadInvoice,
 } from "./utils/api";
@@ -69,6 +75,7 @@ const statusBadgeStyles = {
 };
 
 const voucherOptions = ["Payment", "Receipt", "Contra", "Purchase", "Journal"];
+const bankOptions = ["Kotak Mahindra Bank", "HDFC Bank", "ICICI Bank", "Axis Bank", "SBI", "Yes Bank", "IDFC First Bank"];
 
 const createId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -335,6 +342,28 @@ function FileDropCard({ title, helper, accept, onSelect }) {
   );
 }
 
+function BulkFileDropCard({ title, helper, accept, onSelect }) {
+  return (
+    <label className="flex min-h-[140px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-[#C4B5FD] bg-[#F5F3FF] px-4 text-center">
+      <FileSpreadsheet className="h-7 w-7 text-[#7C3AED]" />
+      <div className="mt-3 text-sm font-semibold text-[#111827]">{title}</div>
+      <div className="mt-2 max-w-sm text-sm text-[#6B7280]">{helper}</div>
+      <div className="mt-4 rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-medium text-[#374151]">Choose multiple files</div>
+      <input
+        className="hidden"
+        type="file"
+        multiple
+        accept={accept}
+        onChange={(event) => {
+          const files = Array.from(event.target.files || []);
+          if (files.length) onSelect(files);
+          event.target.value = "";
+        }}
+      />
+    </label>
+  );
+}
+
 function TallyStatusBadge({ onConnectClick, onStatus }) {
   const [status, setStatus] = useState({
     connectorConnected: false,
@@ -367,6 +396,20 @@ function TallyStatusBadge({ onConnectClick, onStatus }) {
       window.clearInterval(interval);
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeClient) return;
+    setBankProcessingConfig((current) => ({
+      ...current,
+      clientId: activeClient.id,
+      companyName: activeClient.tallyCompanyName || activeClient.name,
+      bankName: activeClient.bankName || current.bankName,
+    }));
+    setDocumentForm((current) => ({
+      ...current,
+      clientId: current.clientId || activeClient.id,
+    }));
+  }, [activeClient?.id]);
 
   const dot = status.tallyConnected ? "bg-[#16A34A]" : status.connectorConnected ? "bg-[#D97706]" : "bg-[#DC2626]";
   const label = status.tallyConnected
@@ -1069,6 +1112,7 @@ export default function App() {
   const [busy, setBusy] = useState("");
   const [ledgerHeads, setLedgerHeads] = useState([]);
   const [clients, setClients] = useState([]);
+  const [documentRequests, setDocumentRequests] = useState([]);
   const [tallyStatus, setTallyStatus] = useState({ connectorConnected: false, tallyConnected: false, tallyCompany: "" });
   const [pairingCode, setPairingCode] = useState("");
   const [pairingModalOpen, setPairingModalOpen] = useState(false);
@@ -1081,7 +1125,11 @@ export default function App() {
   const [bankFilters, setBankFilters] = useState({ search: "", status: "all", voucherType: "all" });
   const [bankSelected, setBankSelected] = useState([]);
   const [bankHint, setBankHint] = useState("");
+  const [bulkBankJobs, setBulkBankJobs] = useState([]);
   const [bankProcessingConfig, setBankProcessingConfig] = useState({
+    clientId: "",
+    companyName: "",
+    bankName: "Kotak Mahindra Bank",
     bankLedgerName: "Bank Account",
     intervalStart: "",
     intervalEnd: "",
@@ -1106,6 +1154,8 @@ export default function App() {
   const [recommendationHint, setRecommendationHint] = useState("");
 
   const [gstReport, setGstReport] = useState({ summary: { matched: 0, partial: 0, unmatched: 0 }, rows: [] });
+  const [clientForm, setClientForm] = useState({ name: "", bankName: "Kotak Mahindra Bank", tallyCompanyName: "" });
+  const [documentForm, setDocumentForm] = useState({ clientId: "", title: "", channel: "WhatsApp", dueDate: "", notes: "" });
   const [settingsForm, setSettingsForm] = useState({
     host: "localhost",
     port: "9000",
@@ -1117,7 +1167,7 @@ export default function App() {
   const [testConnectionResult, setTestConnectionResult] = useState("");
   const [flashRowIds, setFlashRowIds] = useState([]);
 
-  const activeClient = clients[0];
+  const activeClient = clients.find((item) => item.id === bankProcessingConfig.clientId) || clients[0];
   const pageTitle = navigation.find((item) => item.id === activePage)?.label || "Dashboard";
   const ledgerOptions = useMemo(
     () => Array.from(new Set([...ledgerHeads.map((item) => item.name), "Suspense", "Suspense A/c", "Remittance"])),
@@ -1136,16 +1186,28 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([fetchLedgers(), fetchClients(), fetchTallyStatus()])
-      .then(([ledgerPayload, clientPayload, tallyPayload]) => {
+    Promise.all([fetchLedgers(), fetchClients(), fetchTallyStatus(), fetchDocumentRequests()])
+      .then(([ledgerPayload, clientPayload, tallyPayload, requestPayload]) => {
         if (!active) return;
         setLedgerHeads(ledgerPayload.ledgerHeads || []);
-        setClients(clientPayload.clients || []);
+        const nextClients = clientPayload.clients || [];
+        setClients(nextClients);
+        setDocumentRequests(requestPayload.requests || []);
         setTallyStatus(tallyPayload);
         setSettingsForm((current) => ({
           ...current,
           companyName: tallyPayload.tallyCompany || "",
           deviceId: tallyPayload.deviceId || "",
+        }));
+        setBankProcessingConfig((current) => ({
+          ...current,
+          clientId: current.clientId || nextClients[0]?.id || "",
+          companyName: current.companyName || nextClients[0]?.tallyCompanyName || tallyPayload.tallyCompany || "",
+          bankName: current.bankName || nextClients[0]?.bankName || "Kotak Mahindra Bank",
+        }));
+        setDocumentForm((current) => ({
+          ...current,
+          clientId: current.clientId || nextClients[0]?.id || "",
         }));
       })
       .catch((error) => {
@@ -1314,9 +1376,49 @@ export default function App() {
     addToast("Signed out successfully.", "info");
   }
 
+  async function handleCreateClient() {
+    if (!clientForm.name.trim()) return;
+    await withBusy("client-create", async () => {
+      const payload = await createClient(clientForm);
+      setClients((current) => [payload.client, ...current]);
+      setClientForm({ name: "", bankName: clientForm.bankName, tallyCompanyName: "" });
+      setBankProcessingConfig((current) => ({
+        ...current,
+        clientId: payload.client.id,
+        companyName: payload.client.tallyCompanyName || payload.client.name,
+        bankName: payload.client.bankName,
+      }));
+      addToast(`Client ${payload.client.name} created.`, "success");
+    });
+  }
+
+  async function handleCreateDocumentRequest() {
+    const client = clients.find((item) => item.id === documentForm.clientId);
+    if (!client || !documentForm.title.trim()) return;
+    await withBusy("document-request", async () => {
+      const payload = await createDocumentRequest({
+        ...documentForm,
+        clientName: client.name,
+      });
+      setDocumentRequests((current) => [payload.request, ...current]);
+      setDocumentForm((current) => ({ ...current, title: "", dueDate: "", notes: "" }));
+      addToast("Document request logged for follow-up.", "success");
+    });
+  }
+
+  async function handleCompleteDocument(id) {
+    await withBusy("document-complete", async () => {
+      await completeDocumentRequest(id);
+      setDocumentRequests((current) =>
+        current.map((item) => (item.id === id ? { ...item, status: "Received" } : item))
+      );
+      addToast("Document request marked as received.", "success");
+    });
+  }
+
   async function handleBankUpload(file) {
     await withBusy("bank-upload", async () => {
-      const payload = await uploadBankStatement(file);
+      const payload = await uploadBankStatement(file, bankProcessingConfig);
       setBankStatement(payload);
       setBankRows(normalizeBankRows(payload));
       setBankProcessingConfig((current) => ({
@@ -1330,9 +1432,23 @@ export default function App() {
     });
   }
 
+  async function handleBulkBankUpload(files) {
+    await withBusy("bank-bulk-upload", async () => {
+      const payload = await uploadBankStatementsBulk(files, bankProcessingConfig);
+      setBulkBankJobs(payload.jobs || []);
+      const firstSuccess = (payload.jobs || []).find((job) => job.status === "processed");
+      if (firstSuccess?.statement) {
+        setBankStatement(firstSuccess.statement);
+        setBankRows(normalizeBankRows(firstSuccess.statement));
+      }
+      addActivity(`Processed ${payload.summary?.processedFiles || 0} bulk bank files`, "Resolved");
+      addToast(`Bulk run completed for ${payload.summary?.totalFiles || files.length} files.`, "success");
+    });
+  }
+
   async function handleInvoiceUpload(file) {
     await withBusy("invoice-upload", async () => {
-      const payload = await uploadInvoice(file);
+      const payload = await uploadInvoice(file, bankProcessingConfig);
       setInvoice(payload);
       setInvoiceRows(normalizeInvoiceRows(payload));
       setActivePage("invoice");
@@ -1342,7 +1458,7 @@ export default function App() {
 
   async function handleRecommendationUpload(file) {
     await withBusy("recommendation-upload", async () => {
-      const payload = await analyzeRecommendations(file);
+      const payload = await analyzeRecommendations(file, bankProcessingConfig);
       setRecommendations(payload);
       setRecommendationRows(normalizeRecommendationRows(payload));
       setActivePage("recommendations");
@@ -1362,6 +1478,9 @@ export default function App() {
         },
         tallyConfig: {
           ...bankStatement.tallyConfig,
+          companyName: bankProcessingConfig.companyName,
+          clientId: bankProcessingConfig.clientId,
+          bankName: bankProcessingConfig.bankName,
           bankLedgerName: bankProcessingConfig.bankLedgerName,
         },
         transactions: bankRows.map((row) => ({
@@ -1387,6 +1506,34 @@ export default function App() {
       setInvoice(revised);
       setInvoiceRows(normalizeInvoiceRows(revised));
       addToast("Updated invoice extraction using your instruction.", "success");
+    });
+  }
+
+  async function handleLearnCurrentReview() {
+    await withBusy("bank-learn", async () => {
+      const statementPayload = {
+        ...bankStatement,
+        tallyConfig: {
+          ...bankStatement.tallyConfig,
+          companyName: bankProcessingConfig.companyName,
+          clientId: bankProcessingConfig.clientId,
+          bankName: bankProcessingConfig.bankName,
+          bankLedgerName: bankProcessingConfig.bankLedgerName,
+        },
+        transactions: bankRows.map((row) => ({
+          ...row.original,
+          narration: row.particulars,
+          debit: row.debit,
+          credit: row.credit,
+          ledgerHead: row.ledger,
+          voucherType: row.voucherType,
+          debitAccount: row.debit > 0 ? row.ledger : bankProcessingConfig.bankLedgerName,
+          creditAccount: row.credit > 0 ? row.ledger : bankProcessingConfig.bankLedgerName,
+          needsReview: row.status !== "resolved",
+        })),
+      };
+      const payload = await learnBankStatement(statementPayload, bankHint);
+      addToast(payload.message || "Learned current review.", "success");
     });
   }
 
@@ -1504,6 +1651,9 @@ export default function App() {
         },
         tallyConfig: {
           ...bankStatement.tallyConfig,
+          companyName: bankProcessingConfig.companyName,
+          clientId: bankProcessingConfig.clientId,
+          bankName: bankProcessingConfig.bankName,
           bankLedgerName: bankProcessingConfig.bankLedgerName,
         },
         transactions: rowsToPush.map((row) => ({
@@ -1797,6 +1947,88 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+
+                <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+                  <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                    <div className="text-lg font-semibold text-[#111827]">Client Document Inbox</div>
+                    <div className="mt-1 text-sm text-[#6B7280]">Collect statements, registers, and follow-up requests from clients in one place.</div>
+                    <div className="mt-4 space-y-3">
+                      {documentRequests.slice(0, 5).map((request) => (
+                        <div key={request.id} className="rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-[#111827]">{request.title}</div>
+                              <div className="mt-1 text-xs text-[#6B7280]">{request.clientName} • {request.channel} • due {request.dueDate || "open"}</div>
+                            </div>
+                            <Badge status={request.status === "Received" ? "resolved" : request.status === "In Review" ? "pending" : "failed"} confidence="medium" />
+                          </div>
+                          <div className="mt-2 text-sm text-[#6B7280]">{request.notes || "No notes added yet."}</div>
+                          {request.status !== "Received" ? (
+                            <div className="mt-3">
+                              <Button variant="ghost" className="px-3 py-1.5 text-xs" onClick={() => handleCompleteDocument(request.id)}>
+                                Mark Received
+                              </Button>
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-6 md:grid-cols-2">
+                    <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                      <div className="text-lg font-semibold text-[#111827]">Add Client</div>
+                      <div className="mt-4 space-y-3">
+                        <Field label="Client Name">
+                          <input value={clientForm.name} onChange={(event) => setClientForm((current) => ({ ...current, name: event.target.value }))} className="settings-input" />
+                        </Field>
+                        <Field label="Primary Bank">
+                          <select value={clientForm.bankName} onChange={(event) => setClientForm((current) => ({ ...current, bankName: event.target.value }))} className="settings-input">
+                            {bankOptions.map((option) => (
+                              <option key={option} value={option}>{option}</option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="Tally Company Name">
+                          <input value={clientForm.tallyCompanyName} onChange={(event) => setClientForm((current) => ({ ...current, tallyCompanyName: event.target.value }))} className="settings-input" />
+                        </Field>
+                        <Button variant="primary" onClick={handleCreateClient}>Create Client</Button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                      <div className="text-lg font-semibold text-[#111827]">Request Client Documents</div>
+                      <div className="mt-4 space-y-3">
+                        <Field label="Client">
+                          <select value={documentForm.clientId} onChange={(event) => setDocumentForm((current) => ({ ...current, clientId: event.target.value }))} className="settings-input">
+                            {clients.map((client) => (
+                              <option key={client.id} value={client.id}>{client.name}</option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="Document Request">
+                          <input value={documentForm.title} onChange={(event) => setDocumentForm((current) => ({ ...current, title: event.target.value }))} className="settings-input" />
+                        </Field>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <Field label="Channel">
+                            <select value={documentForm.channel} onChange={(event) => setDocumentForm((current) => ({ ...current, channel: event.target.value }))} className="settings-input">
+                              <option>WhatsApp</option>
+                              <option>Email</option>
+                              <option>Phone Call</option>
+                            </select>
+                          </Field>
+                          <Field label="Due Date">
+                            <input type="date" value={documentForm.dueDate} onChange={(event) => setDocumentForm((current) => ({ ...current, dueDate: event.target.value }))} className="settings-input" />
+                          </Field>
+                        </div>
+                        <Field label="Notes">
+                          <textarea value={documentForm.notes} onChange={(event) => setDocumentForm((current) => ({ ...current, notes: event.target.value }))} className="min-h-[92px] w-full rounded-lg border border-[#D1D5DB] px-3 py-2 text-sm outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]" />
+                        </Field>
+                        <Button variant="primary" onClick={handleCreateDocumentRequest}>Log Request</Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : null}
 
@@ -1804,6 +2036,12 @@ export default function App() {
               <div className="space-y-6">
                 <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
                   <div className="space-y-4">
+                    <BulkFileDropCard
+                      title="Bulk quarterly or monthly upload"
+                      helper="Upload multiple PDF statements together. The queue processes them in bulk and keeps failed files separate."
+                      accept="application/pdf"
+                      onSelect={handleBulkBankUpload}
+                    />
                     <FileDropCard
                       title="Upload bank statement"
                       helper="Upload a PDF statement and review AI-mapped ledger suggestions in the table."
@@ -1813,6 +2051,49 @@ export default function App() {
                     <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
                       <div className="text-sm font-semibold text-[#111827]">Processing Configuration</div>
                       <div className="mt-4 space-y-4">
+                        <Field label="Client / Company">
+                          <select
+                            value={bankProcessingConfig.clientId}
+                            onChange={(event) => {
+                              const client = clients.find((item) => item.id === event.target.value);
+                              setBankProcessingConfig((current) => ({
+                                ...current,
+                                clientId: event.target.value,
+                                companyName: client?.tallyCompanyName || client?.name || "",
+                                bankName: client?.bankName || current.bankName,
+                              }));
+                            }}
+                            className="settings-input"
+                          >
+                            {clients.map((client) => (
+                              <option key={client.id} value={client.id}>
+                                {client.name}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="Bank Name">
+                          <select
+                            value={bankProcessingConfig.bankName}
+                            onChange={(event) =>
+                              setBankProcessingConfig((current) => ({ ...current, bankName: event.target.value }))
+                            }
+                            className="settings-input"
+                          >
+                            {bankOptions.map((option) => (
+                              <option key={option} value={option}>{option}</option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="Tally Company Name">
+                          <input
+                            value={bankProcessingConfig.companyName}
+                            onChange={(event) =>
+                              setBankProcessingConfig((current) => ({ ...current, companyName: event.target.value }))
+                            }
+                            className="settings-input"
+                          />
+                        </Field>
                         <Field label="Bank Ledger">
                           <select
                             value={bankProcessingConfig.bankLedgerName}
@@ -1853,6 +2134,43 @@ export default function App() {
                       </div>
                     </div>
                     <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-[#111827]">Bulk Processing Queue</div>
+                          <div className="mt-1 text-xs text-[#6B7280]">Process hundreds of entries file by file and resume review from the queue.</div>
+                        </div>
+                        <div className="rounded-full bg-[#F5F3FF] px-3 py-1 text-xs font-semibold text-[#7C3AED]">{bulkBankJobs.length} jobs</div>
+                      </div>
+                      <div className="mt-4 space-y-3">
+                        {bulkBankJobs.length ? bulkBankJobs.map((job) => (
+                          <button
+                            key={job.id}
+                            type="button"
+                            className="w-full rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] p-3 text-left"
+                            onClick={() => {
+                              if (job.statement) {
+                                setBankStatement(job.statement);
+                                setBankRows(normalizeBankRows(job.statement));
+                              }
+                            }}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold text-[#111827]">{job.fileName}</div>
+                                <div className="mt-1 text-xs text-[#6B7280]">{job.transactionCount || 0} rows • {job.reviewCount || 0} review</div>
+                              </div>
+                              <Badge status={job.status === "processed" ? "resolved" : "failed"} confidence="medium" />
+                            </div>
+                            {job.error ? <div className="mt-2 text-xs text-[#B91C1C]">{job.error}</div> : null}
+                          </button>
+                        )) : (
+                          <div className="rounded-xl border border-dashed border-[#D1D5DB] bg-[#F9FAFB] px-4 py-4 text-sm text-[#6B7280]">
+                            No bulk files processed yet.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <div className="text-[13px] text-[#6B7280]">Total Debits</div>
@@ -1862,6 +2180,12 @@ export default function App() {
                           <div className="text-[13px] text-[#6B7280]">Total Credits</div>
                           <div className="mt-1 text-xl font-semibold text-[#111827]">{formatCurrency(bankRows.reduce((sum, row) => sum + row.credit, 0))}</div>
                         </div>
+                      </div>
+                      <div className="mt-4">
+                        <Button variant="outlinePurple" className="w-full justify-center" onClick={handleLearnCurrentReview}>
+                          <Sparkles className="h-4 w-4" />
+                          Learn From Current Review
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -2047,10 +2371,15 @@ function GstPage({ report, onReconcile }) {
         </Button>
       </div>
       <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-        <div className="grid gap-4 border-b border-[#E5E7EB] px-5 py-4 md:grid-cols-3">
+        <div className="grid gap-4 border-b border-[#E5E7EB] px-5 py-4 md:grid-cols-5">
           <StatMini label="Matched" value={formatNumber(report.summary.matched)} tone="text-[#16A34A]" />
           <StatMini label="Partial" value={formatNumber(report.summary.partial)} tone="text-[#D97706]" />
           <StatMini label="Unmatched" value={formatNumber(report.summary.unmatched)} tone="text-[#DC2626]" />
+          <StatMini label="Duplicate" value={formatNumber(report.summary.duplicateInvoices || 0)} tone="text-[#DC2626]" />
+          <StatMini label="Missing GSTIN" value={formatNumber(report.summary.missingGstin || 0)} tone="text-[#D97706]" />
+        </div>
+        <div className="border-b border-[#E5E7EB] px-5 py-4 text-sm text-[#4B5563]">
+          Exact match rate: <span className="font-semibold text-[#111827]">{report.summary.exactMatchRate || 0}%</span>
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -2060,6 +2389,7 @@ function GstPage({ report, onReconcile }) {
                 <th className="px-4 py-3 font-medium">Invoice</th>
                 <th className="px-4 py-3 font-medium">GSTIN</th>
                 <th className="px-4 py-3 font-medium">Amount</th>
+                <th className="px-4 py-3 font-medium">Risk Bucket</th>
                 <th className="px-4 py-3 font-medium">Reason</th>
               </tr>
             </thead>
@@ -2072,6 +2402,7 @@ function GstPage({ report, onReconcile }) {
                   <td className="px-4 py-3">{row.invoiceNumber}</td>
                   <td className="px-4 py-3">{row.gstin || "—"}</td>
                   <td className="px-4 py-3">{formatCurrency(row.totalAmount)}</td>
+                  <td className="px-4 py-3">{row.riskBucket || "—"}</td>
                   <td className="px-4 py-3 text-[#6B7280]">{row.mismatchReason}</td>
                 </tr>
               ))}

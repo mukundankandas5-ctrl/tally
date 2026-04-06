@@ -1,6 +1,15 @@
+const crypto = require("crypto");
 const express = require("express");
 const { ledgerHeads, defaultVoucherLedgers } = require("../constants/ledgerHeads");
 const { getTallySyncStatus } = require("../services/tallyConnectionService");
+const {
+  createClient,
+  createDocumentRequest,
+  listClients,
+  listDocumentRequests,
+  updateDocumentRequestStatus,
+} = require("../db/database");
+const AppError = require("../utils/appError");
 
 const router = express.Router();
 
@@ -13,13 +22,70 @@ router.get("/ledgers", (req, res) => {
 
 router.get("/clients", (req, res) => {
   res.json({
-    clients: [
-      { id: "aurora", name: "Aurora Traders LLP", pendingEntries: 18, accuracyScore: 98.4, lastActivity: "2026-04-05T10:15:00.000Z" },
-      { id: "bluewave", name: "Bluewave Retail Pvt Ltd", pendingEntries: 6, accuracyScore: 96.9, lastActivity: "2026-04-05T09:10:00.000Z" },
-      { id: "greenleaf", name: "Greenleaf Foods", pendingEntries: 11, accuracyScore: 97.6, lastActivity: "2026-04-04T17:45:00.000Z" },
-    ],
+    clients: listClients(),
     tallyStatus: getTallySyncStatus(),
   });
+});
+
+router.post("/clients", express.json({ limit: "1mb" }), (req, res, next) => {
+  try {
+    const name = String(req.body?.name || "").trim();
+    if (!name) {
+      throw new AppError("Enter a client name before creating the client record.", 400);
+    }
+
+    const client = createClient({
+      id: crypto.randomUUID(),
+      name,
+      bankName: String(req.body?.bankName || "").trim(),
+      tallyCompanyName: String(req.body?.tallyCompanyName || "").trim(),
+    });
+
+    res.status(201).json({ client });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/document-requests", (req, res) => {
+  res.json({
+    requests: listDocumentRequests(),
+  });
+});
+
+router.post("/document-requests", express.json({ limit: "1mb" }), (req, res, next) => {
+  try {
+    const clientId = String(req.body?.clientId || "").trim();
+    const clientName = String(req.body?.clientName || "").trim();
+    const title = String(req.body?.title || "").trim();
+
+    if (!clientId || !clientName || !title) {
+      throw new AppError("Choose a client and provide the requested document details.", 400);
+    }
+
+    const request = createDocumentRequest({
+      id: crypto.randomUUID(),
+      clientId,
+      clientName,
+      title,
+      channel: String(req.body?.channel || "Email").trim(),
+      dueDate: String(req.body?.dueDate || "").trim(),
+      notes: String(req.body?.notes || "").trim(),
+    });
+
+    res.status(201).json({ request });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/document-requests/:id/complete", (req, res, next) => {
+  try {
+    updateDocumentRequestStatus(req.params.id, "Received");
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
 });
 
 module.exports = router;
