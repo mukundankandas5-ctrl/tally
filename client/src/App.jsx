@@ -153,6 +153,18 @@ function countTotals(rows) {
   );
 }
 
+function downloadBlob(blob, filename) {
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.setAttribute("download", filename);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+
 function createEmptyBankStatement() {
   return {
     confidence: "medium",
@@ -788,6 +800,7 @@ function EntryTable({
   onApproveSelected,
   onMapSuspense,
   onExport,
+  onDownloadXml,
   onSendToTally,
   recommendationCards,
   onApproveRecommendation,
@@ -900,6 +913,12 @@ function EntryTable({
               <Download className="h-4 w-4" />
               Export to Excel
             </Button>
+            {onDownloadXml && (
+              <Button variant="ghost" onClick={onDownloadXml}>
+                <Download className="h-4 w-4" />
+                Download Tally XML
+              </Button>
+            )}
             <Button variant="primary" onClick={() => setShowConfirm(true)}>
               <Send className="h-4 w-4" />
               Send to Tally
@@ -1577,6 +1596,75 @@ export default function App() {
       };
       const payload = await learnBankStatement(statementPayload, bankHint);
       addToast(payload.message || "Learned current review.", "success");
+    });
+  }
+
+  async function handleBankDownloadXml() {
+    const resolvedRows = bankRows.filter((row) => row.status === "resolved");
+    if (!resolvedRows.length) {
+      addToast("No resolved entries to export for Tally.", "error");
+      return;
+    }
+    await withBusy("bank-export-xml", async () => {
+      const payload = {
+        ...bankStatement,
+        summary: {
+          ...bankStatement.summary,
+          periodStart: bankProcessingConfig.intervalStart || bankStatement.summary?.periodStart,
+          periodEnd: bankProcessingConfig.intervalEnd || bankStatement.summary?.periodEnd,
+        },
+        tallyConfig: {
+          ...bankStatement.tallyConfig,
+          companyName: bankProcessingConfig.companyName,
+          clientId: bankProcessingConfig.clientId,
+          bankName: bankProcessingConfig.bankName,
+          bankLedgerName: bankProcessingConfig.bankLedgerName,
+        },
+        transactions: resolvedRows.map((row) => ({
+          ...row.original,
+          debit: row.debit,
+          credit: row.credit,
+          ledgerHead: row.ledger,
+          voucherType: row.voucherType,
+          needsReview: false,
+        })),
+      };
+      const blob = await downloadBankStatementXml(payload);
+      downloadBlob(blob, `bank-vouchers-${new Date().toISOString().slice(0, 10)}.xml`);
+      addToast("Vouchers XML ready for Tally import.", "success");
+    });
+  }
+
+  async function handleRecommendationDownloadXml() {
+    const resolvedRows = recommendationRows.filter((row) => row.status === "resolved");
+    if (!resolvedRows.length) {
+      addToast("No resolved recommendations to export for Tally.", "error");
+      return;
+    }
+    await withBusy("recommendation-export-xml", async () => {
+      const filteredPayload = {
+        ...recommendations,
+        mappings: recommendations.mappings.filter((item) => resolvedRows.some((row) => row.id === item.id)).map((item) => ({
+          ...item,
+          accepted: true,
+          suggestion: {
+            ...item.suggestion,
+            ledgerHead: resolvedRows.find((row) => row.id === item.id)?.ledger || item.suggestion?.ledgerHead,
+            voucherType: resolvedRows.find((row) => row.id === item.id)?.voucherType || item.suggestion?.voucherType,
+          },
+        })),
+      };
+      const blob = await downloadRecommendationXml(filteredPayload);
+      downloadBlob(blob, `speedy-vouchers-${new Date().toISOString().slice(0, 10)}.xml`);
+      addToast("Speedy Vouchers XML ready for Tally import.", "success");
+    });
+  }
+
+  async function handleInvoiceDownloadXml() {
+    await withBusy("invoice-export-xml", async () => {
+      const blob = await downloadInvoiceXml(invoice);
+      downloadBlob(blob, `invoice-voucher-${invoice.invoiceNumber || "export"}.xml`);
+      addToast("Invoice XPML ready for Tally import.", "success");
     });
   }
 
@@ -2277,6 +2365,7 @@ export default function App() {
                       aiHint={bankHint}
                       onAiHintChange={setBankHint}
                       onApplyAiHint={handleBankHintApply}
+                      onDownloadXml={handleBankDownloadXml}
                       flashRowIds={flashRowIds}
                     />
                   </div>
@@ -2324,6 +2413,7 @@ export default function App() {
                     aiHint={invoiceHint}
                     onAiHintChange={setInvoiceHint}
                     onApplyAiHint={handleInvoiceHintApply}
+                    onDownloadXml={handleInvoiceDownloadXml}
                     flashRowIds={flashRowIds}
                   />
                 </div>
@@ -2366,6 +2456,7 @@ export default function App() {
                   aiHint={recommendationHint}
                   onAiHintChange={setRecommendationHint}
                   onApplyAiHint={handleRecommendationHintApply}
+                  onDownloadXml={handleRecommendationDownloadXml}
                   flashRowIds={flashRowIds}
                 />
               </div>
