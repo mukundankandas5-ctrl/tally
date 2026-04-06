@@ -2542,7 +2542,7 @@ function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, o
                 </a>
               </div>
               <p className="mt-3 text-xs text-[#9CA3AF]">
-                Version 1.0.0 · Windows 10/11 · 64-bit · Requires TallyPrime running on the same PC
+                Version 1.0.0 · Windows 8.1 / 10 / 11 · 32-bit & 64-bit · Requires TallyPrime running on the same PC
               </p>
             </div>
 

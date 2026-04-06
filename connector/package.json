@@ -2,31 +2,40 @@
   "name": "tally-ai-connector",
   "version": "1.0.0",
   "private": true,
-  "type": "module",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build:win": "electron-builder --win"
   },
   "dependencies": {
-    "axios": "^1.14.0",
-    "electron-store": "^10.1.0",
-    "uuid": "^11.1.0",
-    "ws": "^8.18.3"
+    "axios": "^1.6.8",
+    "electron-store": "^8.2.0",
+    "uuid": "^9.0.1",
+    "ws": "^8.16.0"
   },
   "devDependencies": {
-    "electron": "^36.2.0",
-    "electron-builder": "^25.1.8"
+    "electron": "^22.3.27",
+    "electron-builder": "^24.13.3"
   },
   "build": {
-    "appId": "com.yourname.tallyconnector",
+    "appId": "com.tallyai.connector",
     "productName": "Tally AI Connector",
     "win": {
-      "target": "nsis"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64", "ia32"]
+        }
+      ],
+      "icon": null
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Tally AI Connector"
     }
   }
 }

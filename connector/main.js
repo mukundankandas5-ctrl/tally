@@ -1,9 +1,9 @@
-import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell } from "electron";
-import Store from "electron-store";
-import axios from "axios";
-import WebSocket from "ws";
-import { v4 as uuidv4 } from "uuid";
-import { fileURLToPath } from "url";
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell } = require("electron");
+const Store = require("electron-store");
+const axios = require("axios");
+const WebSocket = require("ws");
+const { v4: uuidv4 } = require("uuid");
+const path = require("path");
 
 const store = new Store({
   defaults: {
@@ -218,61 +218,69 @@ function renderWindowHtml(mode) {
         </div>
       </div>
 
-      <script type="module">
-        const state = await window.connectorApi.getState();
-        document.getElementById("backendUrl").value = state.backendUrl || "";
-        document.getElementById("launchAtStartup").checked = !!state.launchAtStartup;
-        document.getElementById("deviceId").textContent = state.deviceId;
-        document.getElementById("connectorState").textContent = state.connectorConnected ? "Connected" : "Disconnected";
-        document.getElementById("tallyState").textContent = state.tallyConnected ? "Connected" : "Not detected";
-        document.getElementById("companyState").textContent = state.tallyCompany || "No active company";
-        document.getElementById("heartbeatState").textContent = state.lastHeartbeatAt ? new Date(state.lastHeartbeatAt).toLocaleString() : "Never";
+      <script>
+        (async function() {
+          var state = await window.connectorApi.getState();
+          document.getElementById("backendUrl").value = state.backendUrl || "";
+          document.getElementById("launchAtStartup").checked = !!state.launchAtStartup;
+          document.getElementById("deviceId").textContent = state.deviceId;
+          document.getElementById("connectorState").textContent = state.connectorConnected ? "Connected" : "Disconnected";
+          document.getElementById("tallyState").textContent = state.tallyConnected ? "Connected" : "Not detected";
+          document.getElementById("companyState").textContent = state.tallyCompany || "No active company";
+          document.getElementById("heartbeatState").textContent = state.lastHeartbeatAt ? new Date(state.lastHeartbeatAt).toLocaleString() : "Never";
 
-        document.getElementById("settings-form").addEventListener("submit", async (event) => {
-          event.preventDefault();
-          const response = await window.connectorApi.saveSettings({
-            backendUrl: document.getElementById("backendUrl").value,
-            pairingCode: document.getElementById("pairingCode").value,
-            launchAtStartup: document.getElementById("launchAtStartup").checked,
+          document.getElementById("settings-form").addEventListener("submit", async function(event) {
+            event.preventDefault();
+            var response = await window.connectorApi.saveSettings({
+              backendUrl: document.getElementById("backendUrl").value,
+              pairingCode: document.getElementById("pairingCode").value,
+              launchAtStartup: document.getElementById("launchAtStartup").checked,
+            });
+            document.getElementById("message").textContent = response.message;
           });
-          document.getElementById("message").textContent = response.message;
-        });
 
-        document.getElementById("closeButton").addEventListener("click", () => window.connectorApi.closeWindow());
+          document.getElementById("closeButton").addEventListener("click", function() { window.connectorApi.closeWindow(); });
+        })();
       </script>
     </body>
   </html>
   `;
 }
 
-function createWindow({ mode, width = 520, height = 620, assignment }) {
-  const target = new BrowserWindow({
-    width,
-    height,
+function createWindow(opts) {
+  var mode = opts.mode;
+  var width = opts.width || 520;
+  var height = opts.height || 620;
+  var assignment = opts.assignment;
+
+  var target = new BrowserWindow({
+    width: width,
+    height: height,
     show: false,
     resizable: false,
     autoHideMenuBar: true,
     webPreferences: {
-      preload: fileURLToPath(new URL("./preload.js", import.meta.url)),
+      preload: path.join(__dirname, "preload.js"),
     },
   });
 
-  target.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(renderWindowHtml(mode))}`);
-  target.once("ready-to-show", () => target.show());
-  target.on("closed", () => assignment(null));
+  target.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(renderWindowHtml(mode)));
+  target.once("ready-to-show", function() { target.show(); });
+  target.on("closed", function() { assignment(null); });
 
   return target;
 }
 
-function openSettingsWindow(mode = "settings") {
+function openSettingsWindow(mode) {
+  if (!mode) mode = "settings";
   if (settingsWindow) {
     settingsWindow.focus();
     return;
   }
 
   settingsWindow = createWindow({
-    mode,
-    assignment: (value) => {
+    mode: mode,
+    assignment: function(value) {
       settingsWindow = value;
     },
   });
@@ -288,7 +296,7 @@ function openStatusWindow() {
     mode: "settings",
     width: 440,
     height: 540,
-    assignment: (value) => {
+    assignment: function(value) {
       statusWindow = value;
     },
   });
@@ -302,7 +310,7 @@ function updateStartupSetting() {
 
 async function pingTally() {
   try {
-    const response = await axios.post("http://localhost:9000", TALLY_PING_XML, {
+    var response = await axios.post("http://localhost:9000", TALLY_PING_XML, {
       headers: {
         "Content-Type": "text/xml;charset=utf-8",
       },
@@ -310,7 +318,7 @@ async function pingTally() {
       responseType: "text",
     });
 
-    const raw = String(response.data || "");
+    var raw = String(response.data || "");
     tallyConnected = true;
     tallyCompany =
       (raw.match(/<SVCURRENTCOMPANY>(.*?)<\/SVCURRENTCOMPANY>/i) || [])[1] ||
@@ -334,8 +342,8 @@ async function sendHeartbeat() {
       JSON.stringify({
         type: "heartbeat",
         deviceId: getDeviceId(),
-        tallyConnected,
-        tallyCompany,
+        tallyConnected: tallyConnected,
+        tallyCompany: tallyCompany,
         tallyPort: 9000,
         timestamp: new Date().toISOString(),
       })
@@ -347,7 +355,7 @@ async function sendHeartbeat() {
 
 async function pushXmlToLocalTally(entryId, xml) {
   try {
-    const response = await axios.post("http://localhost:9000", xml, {
+    var response = await axios.post("http://localhost:9000", xml, {
       headers: {
         "Content-Type": "text/xml;charset=utf-8",
       },
@@ -355,14 +363,14 @@ async function pushXmlToLocalTally(entryId, xml) {
       responseType: "text",
     });
 
-    const raw = String(response.data || "");
-    const success = !/LINEERROR/i.test(raw) && /<CREATED>/i.test(raw);
+    var raw = String(response.data || "");
+    var success = !/LINEERROR/i.test(raw) && /<CREATED>/i.test(raw);
     if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: "push_result", entryId, success, response: raw }));
+      socket.send(JSON.stringify({ type: "push_result", entryId: entryId, success: success, response: raw }));
     }
   } catch (error) {
     if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: "push_result", entryId, success: false, response: String(error.message || error) }));
+      socket.send(JSON.stringify({ type: "push_result", entryId: entryId, success: false, response: String(error.message || error) }));
     }
   }
 }
@@ -382,15 +390,15 @@ function startHeartbeatLoop() {
 
 function scheduleReconnect() {
   clearTimeout(reconnectTimer);
-  reconnectTimer = setTimeout(() => {
+  reconnectTimer = setTimeout(function() {
     connectSocket();
   }, reconnectDelay);
   reconnectDelay = Math.min(reconnectDelay * 2, 30000);
 }
 
 function connectSocket() {
-  const backendUrl = getBackendUrl();
-  const deviceToken = store.get("deviceToken");
+  var backendUrl = getBackendUrl();
+  var deviceToken = store.get("deviceToken");
 
   if (!backendUrl || !deviceToken) {
     connectorConnected = false;
@@ -400,10 +408,10 @@ function connectSocket() {
   }
 
   lastConnectorMessage = "Connecting to backend";
-  const wsUrl = getWsUrl();
+  var wsUrl = getWsUrl();
   socket = new WebSocket(wsUrl);
 
-  socket.on("open", () => {
+  socket.on("open", function() {
     connectorConnected = true;
     clearTimeout(reconnectTimer);
     reconnectDelay = 2000;
@@ -419,9 +427,9 @@ function connectSocket() {
     updateTray();
   });
 
-  socket.on("message", async (rawMessage) => {
+  socket.on("message", async function(rawMessage) {
     try {
-      const message = JSON.parse(String(rawMessage));
+      var message = JSON.parse(String(rawMessage));
       if (message.type === "push_entry") {
         await pushXmlToLocalTally(message.entryId, message.xml);
       }
@@ -430,21 +438,21 @@ function connectSocket() {
     }
   });
 
-  socket.on("close", () => {
+  socket.on("close", function() {
     connectorConnected = false;
     lastConnectorMessage = "Disconnected from backend";
     updateTray();
     scheduleReconnect();
   });
 
-  socket.on("error", () => {
+  socket.on("error", function() {
     connectorConnected = false;
     lastConnectorMessage = "Connection error";
     updateTray();
   });
 }
 
-function disconnectConnector(clearCredentials = false) {
+function disconnectConnector(clearCredentials) {
   stopHeartbeatLoop();
   if (socket) {
     socket.removeAllListeners();
@@ -468,9 +476,13 @@ function disconnectConnector(clearCredentials = false) {
   }
 }
 
-async function pairConnector({ backendUrl, pairingCode, launchAtStartup }) {
-  const normalizedBackendUrl = String(backendUrl || "").trim().replace(/\/$/, "");
-  const normalizedPairingCode = String(pairingCode || "").trim();
+async function pairConnector(opts) {
+  var backendUrl = opts.backendUrl;
+  var pairingCode = opts.pairingCode;
+  var launchAtStartup = opts.launchAtStartup;
+
+  var normalizedBackendUrl = String(backendUrl || "").trim().replace(/\/$/, "");
+  var normalizedPairingCode = String(pairingCode || "").trim();
 
   if (!normalizedBackendUrl) {
     return { ok: false, message: "Backend URL is required." };
@@ -490,8 +502,8 @@ async function pairConnector({ backendUrl, pairingCode, launchAtStartup }) {
   }
 
   try {
-    const response = await axios.post(
-      `${normalizedBackendUrl}/api/complete-pairing`,
+    var response = await axios.post(
+      normalizedBackendUrl + "/api/complete-pairing",
       {
         pairingCode: String(pairingCode).trim(),
         deviceId: getDeviceId(),
@@ -519,17 +531,17 @@ async function pairConnector({ backendUrl, pairingCode, launchAtStartup }) {
 
     return { ok: true, message: "Connector paired successfully. Running in tray." };
   } catch (error) {
-    return { ok: false, message: error.response?.data?.message || error.message || "Pairing failed." };
+    return { ok: false, message: (error.response && error.response.data && error.response.data.message) || error.message || "Pairing failed." };
   }
 }
 
 function createTray() {
   tray = new Tray(renderIcon(currentTrayColor()));
-  tray.on("double-click", () => openStatusWindow());
+  tray.on("double-click", function() { openStatusWindow(); });
   updateTray();
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(function() {
   createTray();
   updateStartupSetting();
 
@@ -540,14 +552,15 @@ app.whenReady().then(() => {
   }
 });
 
-app.on("window-all-closed", (event) => {
+app.on("window-all-closed", function(event) {
   event.preventDefault();
 });
 
-ipcMain.handle("connector:get-state", () => getStatusSnapshot());
-ipcMain.handle("connector:save-settings", async (event, payload) => pairConnector(payload));
-ipcMain.handle("connector:close-window", (event) => {
-  BrowserWindow.fromWebContents(event.sender)?.hide();
+ipcMain.handle("connector:get-state", function() { return getStatusSnapshot(); });
+ipcMain.handle("connector:save-settings", function(event, payload) { return pairConnector(payload); });
+ipcMain.handle("connector:close-window", function(event) {
+  var win = BrowserWindow.fromWebContents(event.sender);
+  if (win) win.hide();
 });
 
-ipcMain.handle("connector:open-external", async (event, url) => shell.openExternal(url));
+ipcMain.handle("connector:open-external", function(event, url) { return shell.openExternal(url); });
