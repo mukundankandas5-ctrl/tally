@@ -2504,8 +2504,97 @@ function HistoryPage({ activity, syncHistory }) {
 }
 
 function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, onConnectTally, tallyStatus }) {
+  const connectorDownloadUrl = "https://github.com/mukundankandas5-ctrl/tally/releases/latest/download/Tally.AI.Connector.Setup.1.0.0.exe";
+  const connectorReleasesUrl = "https://github.com/mukundankandas5-ctrl/tally/releases/latest";
+
   return (
     <div className="space-y-6">
+      <SettingsCard title="Tally Connector — Download & Setup">
+        <div className="rounded-xl border border-[#E9D5FF] bg-[linear-gradient(135deg,#FAF5FF_0%,#F5F3FF_100%)] p-6">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-10">
+            <div className="flex-1">
+              <div className="inline-flex items-center gap-2 rounded-full bg-[#7C3AED] px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-white">
+                <Download className="h-3.5 w-3.5" /> Windows App
+              </div>
+              <h3 className="mt-3 text-xl font-semibold text-[#111827]">Tally AI Connector</h3>
+              <p className="mt-2 text-sm leading-6 text-[#6B7280]">
+                A lightweight Windows app that bridges your TallyPrime desktop with this cloud workspace.
+                Download, install, pair — and your vouchers push directly into Tally.
+              </p>
+
+              <div className="mt-5 flex flex-wrap items-center gap-3">
+                <a
+                  href={connectorDownloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-lg bg-[#7C3AED] px-5 py-3 text-sm font-semibold text-white shadow-[0_2px_8px_rgba(124,58,237,0.35)] transition hover:bg-[#6D28D9] hover:shadow-[0_4px_16px_rgba(124,58,237,0.4)]"
+                >
+                  <Download className="h-4 w-4" />
+                  Download for Windows
+                </a>
+                <a
+                  href={connectorReleasesUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-lg border border-[#D1D5DB] bg-white px-4 py-3 text-sm font-semibold text-[#374151] transition hover:bg-[#F9FAFB]"
+                >
+                  View All Releases
+                </a>
+              </div>
+              <p className="mt-3 text-xs text-[#9CA3AF]">
+                Version 1.0.0 · Windows 10/11 · 64-bit · Requires TallyPrime running on the same PC
+              </p>
+            </div>
+
+            <div className="w-full max-w-sm shrink-0">
+              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[#7C3AED]">Quick Setup</div>
+              <div className="mt-3 space-y-3">
+                <div className="flex gap-3 rounded-xl border border-[#E5E7EB] bg-white p-4">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#7C3AED] text-sm font-bold text-white">1</div>
+                  <div>
+                    <div className="text-sm font-semibold text-[#111827]">Download & Install</div>
+                    <div className="mt-1 text-xs leading-5 text-[#6B7280]">Click the download button, run the installer on your Windows PC where TallyPrime is installed.</div>
+                  </div>
+                </div>
+                <div className="flex gap-3 rounded-xl border border-[#E5E7EB] bg-white p-4">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#7C3AED] text-sm font-bold text-white">2</div>
+                  <div>
+                    <div className="text-sm font-semibold text-[#111827]">Generate Pairing Code</div>
+                    <div className="mt-1 text-xs leading-5 text-[#6B7280]">Click "Generate Pairing Code" below to get a 6-digit code for your connector.</div>
+                  </div>
+                </div>
+                <div className="flex gap-3 rounded-xl border border-[#E5E7EB] bg-white p-4">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#7C3AED] text-sm font-bold text-white">3</div>
+                  <div>
+                    <div className="text-sm font-semibold text-[#111827]">Enter Code in Connector</div>
+                    <div className="mt-1 text-xs leading-5 text-[#6B7280]">Open the Connector app, paste your backend URL and the pairing code, then click Pair. Done!</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center gap-4">
+          <Button variant="primary" onClick={onConnectTally}>
+            <Send className="h-4 w-4" />
+            Generate Pairing Code
+          </Button>
+          <div className="rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-4 py-2 text-sm text-[#6B7280]">
+            Backend URL for the connector: <strong className="select-all text-[#111827]">{window.location.origin}</strong>
+          </div>
+        </div>
+      </SettingsCard>
+
+      <SettingsCard title="Connector Status">
+        <div className="grid gap-4 md:grid-cols-4">
+          <StatMini label="Connector" value={tallyStatus.connectorConnected ? "Active" : "Disconnected"} tone={tallyStatus.connectorConnected ? "text-[#16A34A]" : "text-[#DC2626]"} />
+          <StatMini label="Tally" value={tallyStatus.tallyConnected ? `Connected — ${tallyStatus.tallyCompany || "Company"}` : "Not detected"} tone={tallyStatus.tallyConnected ? "text-[#16A34A]" : "text-[#D97706]"} />
+          <StatMini label="Last heartbeat" value={tallyStatus.lastSeen ? formatDate(tallyStatus.lastSeen) : "Never"} tone="text-[#111827]" />
+          <StatMini label="Device ID" value={form.deviceId || "Pending"} tone="text-[#111827]" />
+        </div>
+      </SettingsCard>
+
       <SettingsCard title="Tally Connection">
         <div className="grid gap-4 md:grid-cols-3">
           <Field label="Server IP">
@@ -2545,19 +2634,6 @@ function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, o
           </Field>
           <div className="md:self-end">
             <Button variant="outlinePurple">Test AI</Button>
-          </div>
-        </div>
-      </SettingsCard>
-
-      <SettingsCard title="Connector Status">
-        <div className="grid gap-4 md:grid-cols-4">
-          <StatMini label="Connector" value={tallyStatus.connectorConnected ? "Active" : "Disconnected"} tone={tallyStatus.connectorConnected ? "text-[#16A34A]" : "text-[#DC2626]"} />
-          <StatMini label="Last heartbeat" value={tallyStatus.lastSeen ? formatDate(tallyStatus.lastSeen) : "Never"} tone="text-[#111827]" />
-          <StatMini label="Device ID" value={form.deviceId || "Pending"} tone="text-[#111827]" />
-          <div className="flex items-end">
-            <Button variant="danger" onClick={onConnectTally}>
-              Disconnect
-            </Button>
           </div>
         </div>
       </SettingsCard>
