@@ -20,6 +20,10 @@
   "build": {
     "appId": "com.tallyai.connector",
     "productName": "Tally AI Connector",
+    "files": [
+      "**/*",
+      "!dist"
+    ],
     "win": {
       "target": [
         {
