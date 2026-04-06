@@ -499,7 +499,7 @@ function EditableAmountInput({ value, onChange, tone }) {
   );
 }
 
-function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubmit }) {
+function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubmit, showPassword, setShowPassword }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-[linear-gradient(135deg,#1E1B4B_0%,#312E81_52%,#7C3AED_100%)] px-4 py-10">
       <div className="grid w-full max-w-[1080px] overflow-hidden rounded-[28px] bg-white shadow-[0_30px_80px_rgba(15,23,42,0.28)] lg:grid-cols-[0.95fr_1.05fr]">
@@ -573,18 +573,27 @@ function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubm
                 <div className="mb-2 text-sm font-medium text-[#374151]">
                   {mode === "forgot" ? "New Password" : "Password"}
                 </div>
-                <input
-                  type="password"
-                  value={mode === "forgot" ? form.newPassword : form.password}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      [mode === "forgot" ? "newPassword" : "password"]: event.target.value,
-                    }))
-                  }
-                  className="h-11 w-full rounded-xl border border-[#D1D5DB] px-3 text-sm outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]"
-                  placeholder={mode === "forgot" ? "Choose a new password" : "Enter password"}
-                />
+                <div className="flex items-center gap-2">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={mode === "forgot" ? form.newPassword : form.password}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        [mode === "forgot" ? "newPassword" : "password"]: event.target.value,
+                      }))
+                    }
+                    className="h-11 w-full rounded-xl border border-[#D1D5DB] px-3 text-sm outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]"
+                    placeholder={mode === "forgot" ? "Choose a new password" : "Enter password"}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((current) => !current)}
+                    className="h-11 rounded-xl border border-[#D1D5DB] px-3 text-sm font-medium text-[#4B5563] transition hover:bg-[#F9FAFB]"
+                  >
+                    {showPassword ? "Hide" : "Show"}
+                  </button>
+                </div>
               </label>
 
               {mode === "forgot" ? (
@@ -611,7 +620,7 @@ function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubm
               {message ? <div className="rounded-xl border border-[#BBF7D0] bg-[#F0FDF4] px-4 py-3 text-sm text-[#166534]">{message}</div> : null}
               {error ? <div className="rounded-xl border border-[#FECACA] bg-[#FEF2F2] px-4 py-3 text-sm text-[#B91C1C]">{error}</div> : null}
 
-              <Button variant="primary" className="h-11 w-full justify-center" disabled={busy}>
+              <Button type="submit" variant="primary" className="h-11 w-full justify-center" disabled={busy}>
                 {busy
                   ? mode === "signup"
                     ? "Creating account..."
@@ -1041,6 +1050,7 @@ function SpeedyGroupPanel({ groups, ledgerOptions, onApproveGroup, onMarkGroupUn
 export default function App() {
   const [authMode, setAuthMode] = useState("signin");
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "", newPassword: "", resetToken: "" });
+  const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
@@ -1616,6 +1626,8 @@ export default function App() {
         busy={authBusy}
         message={authMessage}
         onSubmit={authMode === "signup" ? handleSignUp : authMode === "forgot" ? handleForgotPassword : handleSignIn}
+        showPassword={showPassword}
+        setShowPassword={setShowPassword}
       />
     );
   }
