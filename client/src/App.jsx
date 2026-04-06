@@ -30,9 +30,11 @@ import {
   analyzeRecommendations,
   createPairingCode,
   downloadRecommendationXml,
+  fetchAuthUsers,
   fetchClients,
   fetchLedgers,
   fetchTallyStatus,
+  loginUser,
   pushBankStatementToTally,
   pushInvoiceToTally,
   pushXmlToTally,
@@ -137,6 +139,53 @@ function countTotals(rows) {
     }),
     { debit: 0, credit: 0 }
   );
+}
+
+function createGroupingSignature(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\b(upi|imps|neft|rtgs|ach|dr|cr|txn|transfer|ref|bank|kotak|mahindra|ltd|pvt|private|limited)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter((token) => token.length > 2 && !/^\d+$/.test(token))
+    .slice(0, 4)
+    .join(" ");
+}
+
+function buildSpeedyGroups(rows) {
+  const groups = new Map();
+
+  rows.forEach((row) => {
+    const signature = createGroupingSignature(row.particulars) || row.particulars.toLowerCase().slice(0, 20) || row.id;
+    const key = `${signature}__${row.voucherType}`;
+    const existing = groups.get(key) || {
+      id: key,
+      signature,
+      title: signature || "Grouped Entries",
+      voucherType: row.voucherType,
+      ledger: row.ledger,
+      rowIds: [],
+      count: 0,
+      total: 0,
+      unresolvedCount: 0,
+      examples: [],
+    };
+
+    existing.rowIds.push(row.id);
+    existing.count += 1;
+    existing.total += Number(row.amount || 0);
+    existing.unresolvedCount += row.status !== "resolved" ? 1 : 0;
+    if (existing.examples.length < 2 && !existing.examples.includes(row.particulars)) {
+      existing.examples.push(row.particulars);
+    }
+    groups.set(key, existing);
+  });
+
+  return Array.from(groups.values())
+    .filter((group) => group.count > 1)
+    .sort((left, right) => right.count - left.count || right.total - left.total);
 }
 
 function getVisibleRows(rows, filters) {
@@ -413,6 +462,77 @@ function EditableAmountInput({ value, onChange, tone }) {
   );
 }
 
+function SignInPage({ users, form, setForm, error, busy, onSubmit }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-[linear-gradient(135deg,#1E1B4B_0%,#312E81_52%,#7C3AED_100%)] px-4 py-10">
+      <div className="grid w-full max-w-[1080px] overflow-hidden rounded-[28px] bg-white shadow-[0_30px_80px_rgba(15,23,42,0.28)] lg:grid-cols-[0.95fr_1.05fr]">
+        <div className="flex flex-col justify-between bg-[#1E1B4B] p-8 text-white">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em]">
+              <ShieldCheck className="h-4 w-4" />
+              Multi User Access
+            </div>
+            <h1 className="mt-6 text-4xl font-semibold leading-tight">Sign in to Tally AI Workspace</h1>
+            <p className="mt-4 text-sm leading-7 text-white/75">
+              Each user gets their own sign-in before reviewing bank statements, invoices, GST reconciliation, and Tally sync actions.
+            </p>
+          </div>
+
+          <div className="mt-8 rounded-2xl border border-white/10 bg-white/5 p-5">
+            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/70">Available users</div>
+            <div className="mt-3 space-y-3 text-sm text-white/85">
+              {users.map((user) => (
+                <div key={user.id} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                  <div className="font-medium">{user.name}</div>
+                  <div className="text-xs text-white/65">{user.email}</div>
+                  <div className="mt-1 text-xs text-white/60">{user.role}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="p-8 lg:p-10">
+          <div className="mx-auto max-w-[420px]">
+            <div className="text-2xl font-semibold text-[#111827]">Welcome back</div>
+            <p className="mt-2 text-sm text-[#6B7280]">Use a configured account to access the dashboard.</p>
+
+            <form className="mt-8 space-y-5" onSubmit={onSubmit}>
+              <label className="block">
+                <div className="mb-2 text-sm font-medium text-[#374151]">Email</div>
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
+                  className="h-11 w-full rounded-xl border border-[#D1D5DB] px-3 text-sm outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]"
+                  placeholder="name@example.com"
+                />
+              </label>
+
+              <label className="block">
+                <div className="mb-2 text-sm font-medium text-[#374151]">Password</div>
+                <input
+                  type="password"
+                  value={form.password}
+                  onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
+                  className="h-11 w-full rounded-xl border border-[#D1D5DB] px-3 text-sm outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]"
+                  placeholder="Enter password"
+                />
+              </label>
+
+              {error ? <div className="rounded-xl border border-[#FECACA] bg-[#FEF2F2] px-4 py-3 text-sm text-[#B91C1C]">{error}</div> : null}
+
+              <Button variant="primary" className="h-11 w-full justify-center" disabled={busy}>
+                {busy ? "Signing in..." : "Sign In"}
+              </Button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TableRow({
   row,
   isSelected,
@@ -421,6 +541,8 @@ function TableRow({
   onFieldChange,
   ledgerOptions,
 }) {
+  const amountEditingEnabled = isSelected || row.status !== "resolved";
+
   return (
     <div
       className={cn(
@@ -440,10 +562,18 @@ function TableRow({
       <div className="truncate px-3 text-[#111827]">{row.particulars}</div>
       <div className="px-3 text-right font-medium text-[#111827]">{formatCurrency(row.amount)}</div>
       <div className="px-3">
-        <EditableAmountInput value={row.debit} tone="debit" onChange={(value) => onFieldChange(row.id, "debit", value)} />
+        {amountEditingEnabled ? (
+          <EditableAmountInput value={row.debit} tone="debit" onChange={(value) => onFieldChange(row.id, "debit", value)} />
+        ) : (
+          <div className="px-2 text-right text-sm font-medium text-[#DC2626]">{formatCurrency(row.debit)}</div>
+        )}
       </div>
       <div className="px-3">
-        <EditableAmountInput value={row.credit} tone="credit" onChange={(value) => onFieldChange(row.id, "credit", value)} />
+        {amountEditingEnabled ? (
+          <EditableAmountInput value={row.credit} tone="credit" onChange={(value) => onFieldChange(row.id, "credit", value)} />
+        ) : (
+          <div className="px-2 text-right text-sm font-medium text-[#16A34A]">{formatCurrency(row.credit)}</div>
+        )}
       </div>
       <div className="px-3">
         <EditableCellSelect value={row.ledger} onChange={(value) => onFieldChange(row.id, "ledger", value)} options={ledgerOptions} />
@@ -718,7 +848,88 @@ function EntryTable({
   );
 }
 
+function SpeedyGroupPanel({ groups, ledgerOptions, onApproveGroup, onMarkGroupUnresolved }) {
+  const [drafts, setDrafts] = useState({});
+
+  const getDraft = (group) =>
+    drafts[group.id] || {
+      ledger: group.ledger,
+      voucherType: group.voucherType,
+    };
+
+  if (!groups.length) {
+    return (
+      <div className="rounded-xl border border-dashed border-[#D1D5DB] bg-[#F9FAFB] px-4 py-6 text-sm text-[#6B7280]">
+        Speedy has no repeat-pattern groups right now. Upload a statement or review more rows to build stronger batches.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {groups.map((group) => {
+        const draft = getDraft(group);
+        return (
+          <div key={group.id} className="rounded-xl border border-[#E5E7EB] bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold capitalize text-[#111827]">{group.title}</div>
+                <div className="mt-1 text-xs text-[#6B7280]">
+                  {group.count} similar entries • {formatCurrency(group.total)} total • {group.unresolvedCount} unresolved
+                </div>
+              </div>
+              <Badge status={group.unresolvedCount ? "pending" : "resolved"} confidence={group.unresolvedCount ? "medium" : "high"} />
+            </div>
+
+            <div className="mt-3 rounded-lg bg-[#F9FAFB] px-3 py-2 text-xs text-[#6B7280]">
+              {group.examples.map((example) => (
+                <div key={example} className="truncate">
+                  {example}
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-3 grid gap-3">
+              <EditableCellSelect
+                value={draft.ledger}
+                onChange={(value) => setDrafts((current) => ({ ...current, [group.id]: { ...draft, ledger: value } }))}
+                options={ledgerOptions}
+              />
+              <EditableCellSelect
+                value={draft.voucherType}
+                onChange={(value) => setDrafts((current) => ({ ...current, [group.id]: { ...draft, voucherType: value } }))}
+                options={voucherOptions}
+              />
+            </div>
+
+            <div className="mt-4 flex gap-2">
+              <Button variant="primary" className="px-3 py-1.5 text-xs" onClick={() => onApproveGroup(group, draft)}>
+                Approve Group
+              </Button>
+              <Button variant="ghost" className="px-3 py-1.5 text-xs" onClick={() => onMarkGroupUnresolved(group)}>
+                Mark Unresolved
+              </Button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function App() {
+  const [authUsers, setAuthUsers] = useState([]);
+  const [authForm, setAuthForm] = useState({ email: "", password: "" });
+  const [authError, setAuthError] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authUser, setAuthUser] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem("tally-ai-session");
+      return raw ? JSON.parse(raw).user : null;
+    } catch (error) {
+      return null;
+    }
+  });
   const [activePage, setActivePage] = useState("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(window.innerWidth < 768);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -746,6 +957,11 @@ export default function App() {
   const [bankFilters, setBankFilters] = useState({ search: "", status: "all", voucherType: "all" });
   const [bankSelected, setBankSelected] = useState([]);
   const [bankHint, setBankHint] = useState("");
+  const [bankProcessingConfig, setBankProcessingConfig] = useState({
+    bankLedgerName: "Bank Account",
+    intervalStart: createDemoBankStatement({ bankLedgerName: "Bank Account" }).summary.periodStart || "",
+    intervalEnd: createDemoBankStatement({ bankLedgerName: "Bank Account" }).summary.periodEnd || "",
+  });
 
   const [invoice, setInvoice] = useState(createDemoInvoice({ purchaseLedgerName: "Purchase A/c" }));
   const [invoiceRows, setInvoiceRows] = useState(normalizeInvoiceRows(createDemoInvoice({ purchaseLedgerName: "Purchase A/c" })));
@@ -796,12 +1012,13 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([fetchLedgers(), fetchClients(), fetchTallyStatus()])
-      .then(([ledgerPayload, clientPayload, tallyPayload]) => {
+    Promise.all([fetchLedgers(), fetchClients(), fetchTallyStatus(), fetchAuthUsers()])
+      .then(([ledgerPayload, clientPayload, tallyPayload, authPayload]) => {
         if (!active) return;
         setLedgerHeads(ledgerPayload.ledgerHeads || []);
         setClients(clientPayload.clients || []);
         setTallyStatus(tallyPayload);
+        setAuthUsers(authPayload.users || []);
         setSettingsForm((current) => ({
           ...current,
           companyName: tallyPayload.tallyCompany || "",
@@ -882,8 +1099,15 @@ export default function App() {
           ? {
               ...row,
               [field]: value,
-              amount: field === "debit" || field === "credit" ? Number(value || row.amount) : row.amount,
+              amount:
+                field === "debit"
+                  ? Number(value || 0) || Number(row.credit || 0)
+                  : field === "credit"
+                    ? Number(value || 0) || Number(row.debit || 0)
+                    : row.amount,
               status: field === "status" ? value : "resolved",
+              ...(field === "debit" && Number(value || 0) > 0 ? { credit: 0 } : {}),
+              ...(field === "credit" && Number(value || 0) > 0 ? { debit: 0 } : {}),
             }
           : row
       )
@@ -891,11 +1115,41 @@ export default function App() {
     withFlash([id]);
   }
 
+  async function handleSignIn(event) {
+    event.preventDefault();
+    setAuthBusy(true);
+    setAuthError("");
+
+    try {
+      const payload = await loginUser(authForm.email, authForm.password);
+      setAuthUser(payload.user);
+      window.localStorage.setItem("tally-ai-session", JSON.stringify(payload));
+      addToast(`Signed in as ${payload.user.name}.`, "success");
+    } catch (error) {
+      setAuthError(error.message);
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  function handleSignOut() {
+    setAuthUser(null);
+    setAuthForm({ email: "", password: "" });
+    window.localStorage.removeItem("tally-ai-session");
+    addToast("Signed out successfully.", "info");
+  }
+
   async function handleBankUpload(file) {
     await withBusy("bank-upload", async () => {
       const payload = await uploadBankStatement(file);
       setBankStatement(payload);
       setBankRows(normalizeBankRows(payload));
+      setBankProcessingConfig((current) => ({
+        ...current,
+        bankLedgerName: payload.tallyConfig?.bankLedgerName || current.bankLedgerName,
+        intervalStart: payload.summary?.periodStart || current.intervalStart,
+        intervalEnd: payload.summary?.periodEnd || current.intervalEnd,
+      }));
       setActivePage("bank");
       addActivity(`Loaded bank statement ${file.name}`, "Resolved");
     });
@@ -926,6 +1180,15 @@ export default function App() {
     await withBusy("bank-revise", async () => {
       const statementPayload = {
         ...bankStatement,
+        summary: {
+          ...bankStatement.summary,
+          periodStart: bankProcessingConfig.intervalStart || bankStatement.summary?.periodStart,
+          periodEnd: bankProcessingConfig.intervalEnd || bankStatement.summary?.periodEnd,
+        },
+        tallyConfig: {
+          ...bankStatement.tallyConfig,
+          bankLedgerName: bankProcessingConfig.bankLedgerName,
+        },
         transactions: bankRows.map((row) => ({
           ...row.original,
           debit: row.debit,
@@ -994,6 +1257,39 @@ export default function App() {
     withFlash([id]);
   }
 
+  function applySpeedyGroup(group, draft) {
+    setBankRows((current) =>
+      current.map((row) =>
+        group.rowIds.includes(row.id)
+          ? {
+              ...row,
+              ledger: draft.ledger,
+              voucherType: draft.voucherType,
+              status: "resolved",
+            }
+          : row
+      )
+    );
+    setBankSelected((current) => Array.from(new Set([...current, ...group.rowIds])));
+    withFlash(group.rowIds);
+    addToast(`Approved ${group.count} grouped entries using Speedy.`, "success");
+  }
+
+  function markSpeedyGroupUnresolved(group) {
+    setBankRows((current) =>
+      current.map((row) =>
+        group.rowIds.includes(row.id)
+          ? {
+              ...row,
+              status: "pending",
+            }
+          : row
+      )
+    );
+    withFlash(group.rowIds);
+    addToast(`Marked ${group.count} grouped entries as unresolved.`, "info");
+  }
+
   function exportRowsToExcel(rows, filename, filters) {
     const visibleRows = getVisibleRows(rows, filters).map((row) => ({
       Status: row.status,
@@ -1026,6 +1322,15 @@ export default function App() {
     await withBusy("bank-push", async () => {
       const payload = {
         ...bankStatement,
+        summary: {
+          ...bankStatement.summary,
+          periodStart: bankProcessingConfig.intervalStart || bankStatement.summary?.periodStart,
+          periodEnd: bankProcessingConfig.intervalEnd || bankStatement.summary?.periodEnd,
+        },
+        tallyConfig: {
+          ...bankStatement.tallyConfig,
+          bankLedgerName: bankProcessingConfig.bankLedgerName,
+        },
         transactions: rowsToPush.map((row) => ({
           ...row.original,
           debit: row.debit,
@@ -1124,6 +1429,7 @@ export default function App() {
   }
 
   const bankRecommendationCards = bankRows.filter((row) => row.status === "pending").slice(0, 8);
+  const speedyGroups = useMemo(() => buildSpeedyGroups(bankRows), [bankRows]);
   const recommendationCards = recommendationRows.filter((row) => row.status === "pending").slice(0, 8);
   const invoiceCards = invoiceRows.filter((row) => row.status === "pending").slice(0, 8);
 
@@ -1133,6 +1439,19 @@ export default function App() {
     { label: "Bank Rows Mapped", value: formatNumber(bankRows.length), change: "+84 today", icon: Landmark },
     { label: "Hours Saved", value: "17.5", change: "+2.4 today", icon: Clock3 },
   ];
+
+  if (!authUser) {
+    return (
+      <SignInPage
+        users={authUsers}
+        form={authForm}
+        setForm={setAuthForm}
+        error={authError}
+        busy={authBusy}
+        onSubmit={handleSignIn}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-white text-[#111827]">
@@ -1191,10 +1510,12 @@ export default function App() {
               {!sidebarCollapsed ? (
                 <>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-white">{activeClient?.name || "Mukundan"}</div>
-                    <div className="text-xs text-white/70">Administrator</div>
+                    <div className="truncate text-sm font-medium text-white">{authUser.name}</div>
+                    <div className="text-xs text-white/70">{authUser.role || "Signed in"}</div>
                   </div>
-                  <LogOut className="h-4 w-4 text-white/70" />
+                  <button type="button" onClick={handleSignOut} className="rounded-md p-1 text-white/70 hover:bg-white/10">
+                    <LogOut className="h-4 w-4 text-white/70" />
+                  </button>
                 </>
               ) : null}
             </div>
@@ -1216,7 +1537,13 @@ export default function App() {
               <AppIconButton className="h-9 w-9">
                 <Bell className="h-4 w-4" />
               </AppIconButton>
-              <UserCircle2 className="h-8 w-8 text-[#6B7280]" />
+              <div className="flex items-center gap-2 rounded-full border border-[#E5E7EB] bg-white px-3 py-1.5">
+                <UserCircle2 className="h-8 w-8 text-[#6B7280]" />
+                <div className="hidden text-left md:block">
+                  <div className="text-sm font-medium text-[#111827]">{authUser.name}</div>
+                  <div className="text-[11px] text-[#6B7280]">{authUser.role}</div>
+                </div>
+              </div>
             </div>
           </header>
 
@@ -1305,6 +1632,48 @@ export default function App() {
                       onSelect={handleBankUpload}
                     />
                     <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                      <div className="text-sm font-semibold text-[#111827]">Processing Configuration</div>
+                      <div className="mt-4 space-y-4">
+                        <Field label="Bank Ledger">
+                          <select
+                            value={bankProcessingConfig.bankLedgerName}
+                            onChange={(event) =>
+                              setBankProcessingConfig((current) => ({ ...current, bankLedgerName: event.target.value }))
+                            }
+                            className="settings-input"
+                          >
+                            {ledgerOptions.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <Field label="Interval Start">
+                            <input
+                              type="date"
+                              value={bankProcessingConfig.intervalStart}
+                              onChange={(event) =>
+                                setBankProcessingConfig((current) => ({ ...current, intervalStart: event.target.value }))
+                              }
+                              className="settings-input"
+                            />
+                          </Field>
+                          <Field label="Interval End">
+                            <input
+                              type="date"
+                              value={bankProcessingConfig.intervalEnd}
+                              onChange={(event) =>
+                                setBankProcessingConfig((current) => ({ ...current, intervalEnd: event.target.value }))
+                              }
+                              className="settings-input"
+                            />
+                          </Field>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <div className="text-[13px] text-[#6B7280]">Total Debits</div>
@@ -1318,31 +1687,55 @@ export default function App() {
                     </div>
                   </div>
 
-                  <EntryTable
-                    title="Entry Management"
-                    subtitle="Review mapped bank transactions, update debit/credit or ledger values, and push only the rows you trust."
-                    rows={bankRows}
-                    ledgerOptions={ledgerOptions}
-                    filters={bankFilters}
-                    onFiltersChange={setBankFilters}
-                    selectedRowIds={bankSelected}
-                    onToggleRow={(id) => toggleRow(bankSelected, setBankSelected, id)}
-                    onToggleAll={() => toggleAll(getVisibleRows(bankRows, bankFilters), bankSelected, setBankSelected)}
-                    onFieldChange={(id, field, value) => updateRowCollection(setBankRows, id, field, value)}
-                    onApproveSelected={(ledger) => approveSelected(setBankRows, bankSelected, ledger)}
-                    onMapSuspense={() => mapSuspense(setBankRows)}
-                    onExport={() => exportRowsToExcel(bankRows, "bank-entries.xlsx", bankFilters)}
-                    onSendToTally={handleBankPush}
-                    recommendationCards={bankRecommendationCards}
-                    onApproveRecommendation={(id) => {
-                      setBankRows((current) => current.map((row) => (row.id === id ? { ...row, status: "resolved" } : row)));
-                      withFlash([id]);
-                    }}
-                    aiHint={bankHint}
-                    onAiHintChange={setBankHint}
-                    onApplyAiHint={handleBankHintApply}
-                    flashRowIds={flashRowIds}
-                  />
+                  <div className="space-y-4">
+                    <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-lg font-semibold text-[#111827]">Speedy Grouped Recommendations</div>
+                          <div className="mt-1 text-sm text-[#6B7280]">
+                            Similar entries are clubbed together so you can assign one ledger and voucher type in bulk.
+                          </div>
+                        </div>
+                        <div className="rounded-full bg-[#F5F3FF] px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-[#7C3AED]">
+                          {speedyGroups.length} groups
+                        </div>
+                      </div>
+                      <div className="mt-4">
+                        <SpeedyGroupPanel
+                          groups={speedyGroups}
+                          ledgerOptions={ledgerOptions}
+                          onApproveGroup={applySpeedyGroup}
+                          onMarkGroupUnresolved={markSpeedyGroupUnresolved}
+                        />
+                      </div>
+                    </div>
+
+                    <EntryTable
+                      title="Entry Management"
+                      subtitle="Review grouped suggestions, modify specific rows, or leave unchecked rows unresolved for smaller batches later."
+                      rows={bankRows}
+                      ledgerOptions={ledgerOptions}
+                      filters={bankFilters}
+                      onFiltersChange={setBankFilters}
+                      selectedRowIds={bankSelected}
+                      onToggleRow={(id) => toggleRow(bankSelected, setBankSelected, id)}
+                      onToggleAll={() => toggleAll(getVisibleRows(bankRows, bankFilters), bankSelected, setBankSelected)}
+                      onFieldChange={(id, field, value) => updateRowCollection(setBankRows, id, field, value)}
+                      onApproveSelected={(ledger) => approveSelected(setBankRows, bankSelected, ledger)}
+                      onMapSuspense={() => mapSuspense(setBankRows)}
+                      onExport={() => exportRowsToExcel(bankRows, "bank-entries.xlsx", bankFilters)}
+                      onSendToTally={handleBankPush}
+                      recommendationCards={bankRecommendationCards}
+                      onApproveRecommendation={(id) => {
+                        setBankRows((current) => current.map((row) => (row.id === id ? { ...row, status: "resolved" } : row)));
+                        withFlash([id]);
+                      }}
+                      aiHint={bankHint}
+                      onAiHintChange={setBankHint}
+                      onApplyAiHint={handleBankHintApply}
+                      flashRowIds={flashRowIds}
+                    />
+                  </div>
                 </div>
               </div>
             ) : null}

@@ -12,6 +12,7 @@ const recommendationRoutes = require("./routes/recommendationRoutes");
 const gstRoutes = require("./routes/gstRoutes");
 const tallyRoutes = require("./routes/tallyRoutes");
 const connectorRoutes = require("./routes/connectorRoutes");
+const authRoutes = require("./routes/authRoutes");
 
 const app = express();
 
@@ -26,6 +27,7 @@ app.get("/api/health", (req, res) => {
   res.json({ ok: true });
 });
 
+app.use("/api/auth", authRoutes);
 app.use("/api/reference", referenceRoutes);
 app.use("/api/invoices", invoiceRoutes);
 app.use("/api/bank-statements", bankStatementRoutes);

@@ -48,6 +48,18 @@ export async function fetchClients() {
   return fetchJson("/api/reference/clients");
 }
 
+export async function fetchAuthUsers() {
+  return fetchJson("/api/auth/users");
+}
+
+export async function loginUser(email, password) {
+  return fetchJson("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
 export async function fetchTallyStatus() {
   return fetchJson("/api/tally-status");
 }
