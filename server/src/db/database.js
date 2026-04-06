@@ -61,40 +61,7 @@ db.exec(`
   );
 `);
 
-const seedClients = [
-  ["aurora", "Aurora Traders LLP", "Kotak Mahindra Bank", "Aurora Traders LLP", 18, 98.4, "2026-04-05T10:15:00.000Z"],
-  ["bluewave", "Bluewave Retail Pvt Ltd", "HDFC Bank", "Bluewave Retail Pvt Ltd", 6, 96.9, "2026-04-05T09:10:00.000Z"],
-  ["greenleaf", "Greenleaf Foods", "ICICI Bank", "Greenleaf Foods", 11, 97.6, "2026-04-04T17:45:00.000Z"],
-];
 
-const seedDocumentRequests = [
-  ["doc-aurora-q4-bank", "aurora", "Aurora Traders LLP", "Q4 bank statement and bank charges advice", "WhatsApp", "Pending", "2026-04-08", "Follow up for missing March statement PDF."],
-  ["doc-bluewave-gst", "bluewave", "Bluewave Retail Pvt Ltd", "March purchase register for GST reconciliation", "Email", "In Review", "2026-04-07", "Client shared draft workbook, awaiting final copy."],
-];
-
-function seedIfEmpty() {
-  const clientCount = db.prepare("SELECT COUNT(*) AS count FROM clients").get()?.count || 0;
-  if (!clientCount) {
-    const insertClient = db.prepare(
-      `INSERT INTO clients
-       (id, name, bank_name, tally_company_name, pending_entries, accuracy_score, last_activity, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
-    );
-    seedClients.forEach((client) => insertClient.run(...client));
-  }
-
-  const requestCount = db.prepare("SELECT COUNT(*) AS count FROM document_requests").get()?.count || 0;
-  if (!requestCount) {
-    const insertRequest = db.prepare(
-      `INSERT INTO document_requests
-       (id, client_id, client_name, title, channel, status, due_date, notes, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
-    );
-    seedDocumentRequests.forEach((request) => insertRequest.run(...request));
-  }
-}
-
-seedIfEmpty();
 
 function sanitizeUser(row) {
   if (!row) return null;
