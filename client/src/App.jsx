@@ -25,12 +25,10 @@ import {
 } from "lucide-react";
 import { List } from "react-window";
 import * as XLSX from "xlsx";
-import { createDemoBankStatement, createDemoInvoice } from "./constants/sampleData";
 import {
   analyzeRecommendations,
   createPairingCode,
   downloadRecommendationXml,
-  fetchAuthUsers,
   fetchClients,
   fetchLedgers,
   fetchTallyStatus,
@@ -39,8 +37,11 @@ import {
   pushInvoiceToTally,
   pushXmlToTally,
   reconcileGst,
+  requestPasswordReset,
+  resetPassword,
   reviseBankStatement,
   reviseInvoice,
+  signupUser,
   testTallyConnection,
   uploadBankStatement,
   uploadInvoice,
@@ -139,6 +140,42 @@ function countTotals(rows) {
     }),
     { debit: 0, credit: 0 }
   );
+}
+
+function createEmptyBankStatement() {
+  return {
+    confidence: "medium",
+    summary: { periodStart: "", periodEnd: "", totalDebits: 0, totalCredits: 0, transactionCount: 0, reviewCount: 0 },
+    transactions: [],
+    reviewNotes: [],
+    tallyConfig: { companyName: "", bankLedgerName: "Bank Account" },
+    learningSummary: { learnedRuleCount: 0, recentInstructions: [] },
+  };
+}
+
+function createEmptyInvoice() {
+  return {
+    confidence: "medium",
+    vendorName: "",
+    invoiceNumber: "",
+    invoiceDate: "",
+    dueDate: "",
+    vendorGstin: "",
+    subtotal: 0,
+    cgst: 0,
+    sgst: 0,
+    igst: 0,
+    total: 0,
+    lineItems: [],
+    reviewNotes: [],
+    tallyConfig: {
+      companyName: "",
+      purchaseLedgerName: "Purchase A/c",
+      cgstLedgerName: "Input CGST",
+      sgstLedgerName: "Input SGST",
+      igstLedgerName: "Input IGST",
+    },
+  };
 }
 
 function createGroupingSignature(text) {
@@ -462,7 +499,7 @@ function EditableAmountInput({ value, onChange, tone }) {
   );
 }
 
-function SignInPage({ users, form, setForm, error, busy, onSubmit }) {
+function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubmit }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-[linear-gradient(135deg,#1E1B4B_0%,#312E81_52%,#7C3AED_100%)] px-4 py-10">
       <div className="grid w-full max-w-[1080px] overflow-hidden rounded-[28px] bg-white shadow-[0_30px_80px_rgba(15,23,42,0.28)] lg:grid-cols-[0.95fr_1.05fr]">
@@ -470,34 +507,57 @@ function SignInPage({ users, form, setForm, error, busy, onSubmit }) {
           <div>
             <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em]">
               <ShieldCheck className="h-4 w-4" />
-              Multi User Access
+              Secure Workspace Access
             </div>
-            <h1 className="mt-6 text-4xl font-semibold leading-tight">Sign in to Tally AI Workspace</h1>
+            <h1 className="mt-6 text-4xl font-semibold leading-tight">
+              {mode === "signup" ? "Create your account" : mode === "forgot" ? "Reset your password" : "Sign in to Tally AI Workspace"}
+            </h1>
             <p className="mt-4 text-sm leading-7 text-white/75">
-              Each user gets their own sign-in before reviewing bank statements, invoices, GST reconciliation, and Tally sync actions.
+              {mode === "signup"
+                ? "Create a user account to access bank processing, invoice review, GST reconciliation, and Tally sync actions."
+                : mode === "forgot"
+                  ? "Reset your password and continue back into the accounting workspace."
+                  : "Sign in with your email and password to continue into the accounting workspace."}
             </p>
           </div>
 
           <div className="mt-8 rounded-2xl border border-white/10 bg-white/5 p-5">
-            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/70">Available users</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/70">Workspace flow</div>
             <div className="mt-3 space-y-3 text-sm text-white/85">
-              {users.map((user) => (
-                <div key={user.id} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
-                  <div className="font-medium">{user.name}</div>
-                  <div className="text-xs text-white/65">{user.email}</div>
-                  <div className="mt-1 text-xs text-white/60">{user.role}</div>
-                </div>
-              ))}
+              <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">1. Sign up with your name, email, and password</div>
+              <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">2. Sign in to review bank statements and invoices</div>
+              <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">3. Use forgot password if you need to reset your access</div>
             </div>
           </div>
         </div>
 
         <div className="p-8 lg:p-10">
           <div className="mx-auto max-w-[420px]">
-            <div className="text-2xl font-semibold text-[#111827]">Welcome back</div>
-            <p className="mt-2 text-sm text-[#6B7280]">Use a configured account to access the dashboard.</p>
+            <div className="text-2xl font-semibold text-[#111827]">
+              {mode === "signup" ? "New account" : mode === "forgot" ? "Password recovery" : "Welcome back"}
+            </div>
+            <p className="mt-2 text-sm text-[#6B7280]">
+              {mode === "signup"
+                ? "Create an account to access the dashboard."
+                : mode === "forgot"
+                  ? "Request a reset code, then use it to set a new password."
+                  : "Enter your email and password to access the dashboard."}
+            </p>
 
             <form className="mt-8 space-y-5" onSubmit={onSubmit}>
+              {mode === "signup" ? (
+                <label className="block">
+                  <div className="mb-2 text-sm font-medium text-[#374151]">Name</div>
+                  <input
+                    type="text"
+                    value={form.name}
+                    onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                    className="h-11 w-full rounded-xl border border-[#D1D5DB] px-3 text-sm outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]"
+                    placeholder="Your full name"
+                  />
+                </label>
+              ) : null}
+
               <label className="block">
                 <div className="mb-2 text-sm font-medium text-[#374151]">Email</div>
                 <input
@@ -510,22 +570,83 @@ function SignInPage({ users, form, setForm, error, busy, onSubmit }) {
               </label>
 
               <label className="block">
-                <div className="mb-2 text-sm font-medium text-[#374151]">Password</div>
+                <div className="mb-2 text-sm font-medium text-[#374151]">
+                  {mode === "forgot" ? "New Password" : "Password"}
+                </div>
                 <input
                   type="password"
-                  value={form.password}
-                  onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
+                  value={mode === "forgot" ? form.newPassword : form.password}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      [mode === "forgot" ? "newPassword" : "password"]: event.target.value,
+                    }))
+                  }
                   className="h-11 w-full rounded-xl border border-[#D1D5DB] px-3 text-sm outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]"
-                  placeholder="Enter password"
+                  placeholder={mode === "forgot" ? "Choose a new password" : "Enter password"}
                 />
               </label>
 
+              {mode === "forgot" ? (
+                <label className="block">
+                  <div className="mb-2 text-sm font-medium text-[#374151]">Reset Code</div>
+                  <input
+                    type="text"
+                    value={form.resetToken}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        resetToken: event.target.value.toUpperCase(),
+                      }))
+                    }
+                    className="h-11 w-full rounded-xl border border-[#D1D5DB] px-3 text-sm uppercase tracking-[0.16em] outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]"
+                    placeholder="Enter reset code"
+                  />
+                  <div className="mt-2 text-xs text-[#6B7280]">
+                    Leave this empty the first time to generate a reset code for the email above.
+                  </div>
+                </label>
+              ) : null}
+
+              {message ? <div className="rounded-xl border border-[#BBF7D0] bg-[#F0FDF4] px-4 py-3 text-sm text-[#166534]">{message}</div> : null}
               {error ? <div className="rounded-xl border border-[#FECACA] bg-[#FEF2F2] px-4 py-3 text-sm text-[#B91C1C]">{error}</div> : null}
 
               <Button variant="primary" className="h-11 w-full justify-center" disabled={busy}>
-                {busy ? "Signing in..." : "Sign In"}
+                {busy
+                  ? mode === "signup"
+                    ? "Creating account..."
+                    : mode === "forgot"
+                      ? form.resetToken
+                        ? "Updating password..."
+                        : "Generating reset code..."
+                      : "Signing in..."
+                  : mode === "signup"
+                    ? "Sign Up"
+                    : mode === "forgot"
+                      ? form.resetToken
+                        ? "Update Password"
+                        : "Generate Reset Code"
+                      : "Sign In"}
               </Button>
             </form>
+
+            <div className="mt-6 flex flex-wrap gap-4 text-sm">
+              {mode !== "signin" ? (
+                <button type="button" className="font-medium text-[#7C3AED]" onClick={() => setMode("signin")}>
+                  Back to sign in
+                </button>
+              ) : null}
+              {mode !== "signup" ? (
+                <button type="button" className="font-medium text-[#7C3AED]" onClick={() => setMode("signup")}>
+                  Create account
+                </button>
+              ) : null}
+              {mode !== "forgot" ? (
+                <button type="button" className="font-medium text-[#7C3AED]" onClick={() => setMode("forgot")}>
+                  Forgot password
+                </button>
+              ) : null}
+            </div>
           </div>
         </div>
       </div>
@@ -918,9 +1039,10 @@ function SpeedyGroupPanel({ groups, ledgerOptions, onApproveGroup, onMarkGroupUn
 }
 
 export default function App() {
-  const [authUsers, setAuthUsers] = useState([]);
-  const [authForm, setAuthForm] = useState({ email: "", password: "" });
+  const [authMode, setAuthMode] = useState("signin");
+  const [authForm, setAuthForm] = useState({ name: "", email: "", password: "", newPassword: "", resetToken: "" });
   const [authError, setAuthError] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [authUser, setAuthUser] = useState(() => {
     try {
@@ -941,30 +1063,22 @@ export default function App() {
   const [pairingCode, setPairingCode] = useState("");
   const [pairingModalOpen, setPairingModalOpen] = useState(false);
   const [toasts, setToasts] = useState([]);
-  const [activity, setActivity] = useState([
-    { id: "a1", text: "128 bank rows mapped from SBI statement", time: "Today, 11:42 AM", status: "Resolved" },
-    { id: "a2", text: "Purchase voucher sent to TallyPrime", time: "Today, 10:16 AM", status: "Resolved" },
-    { id: "a3", text: "3 rows need review before push", time: "Today, 09:51 AM", status: "Pending" },
-  ]);
-  const [syncHistory, setSyncHistory] = useState([
-    { id: "s1", time: "11:42 AM", type: "Bank", entries: 25, status: "Resolved", company: "Aurora Traders LLP" },
-    { id: "s2", time: "10:16 AM", type: "Invoice", entries: 1, status: "Resolved", company: "Aurora Traders LLP" },
-    { id: "s3", time: "Yesterday", type: "Recommendations", entries: 18, status: "Failed", company: "Bluewave Retail Pvt Ltd" },
-  ]);
+  const [activity, setActivity] = useState([]);
+  const [syncHistory, setSyncHistory] = useState([]);
 
-  const [bankStatement, setBankStatement] = useState(createDemoBankStatement({ bankLedgerName: "Bank Account" }));
-  const [bankRows, setBankRows] = useState(normalizeBankRows(createDemoBankStatement({ bankLedgerName: "Bank Account" })));
+  const [bankStatement, setBankStatement] = useState(createEmptyBankStatement());
+  const [bankRows, setBankRows] = useState(normalizeBankRows(createEmptyBankStatement()));
   const [bankFilters, setBankFilters] = useState({ search: "", status: "all", voucherType: "all" });
   const [bankSelected, setBankSelected] = useState([]);
   const [bankHint, setBankHint] = useState("");
   const [bankProcessingConfig, setBankProcessingConfig] = useState({
     bankLedgerName: "Bank Account",
-    intervalStart: createDemoBankStatement({ bankLedgerName: "Bank Account" }).summary.periodStart || "",
-    intervalEnd: createDemoBankStatement({ bankLedgerName: "Bank Account" }).summary.periodEnd || "",
+    intervalStart: "",
+    intervalEnd: "",
   });
 
-  const [invoice, setInvoice] = useState(createDemoInvoice({ purchaseLedgerName: "Purchase A/c" }));
-  const [invoiceRows, setInvoiceRows] = useState(normalizeInvoiceRows(createDemoInvoice({ purchaseLedgerName: "Purchase A/c" })));
+  const [invoice, setInvoice] = useState(createEmptyInvoice());
+  const [invoiceRows, setInvoiceRows] = useState(normalizeInvoiceRows(createEmptyInvoice()));
   const [invoiceFilters, setInvoiceFilters] = useState({ search: "", status: "all", voucherType: "all" });
   const [invoiceSelected, setInvoiceSelected] = useState([]);
   const [invoiceHint, setInvoiceHint] = useState("");
@@ -1012,13 +1126,12 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([fetchLedgers(), fetchClients(), fetchTallyStatus(), fetchAuthUsers()])
-      .then(([ledgerPayload, clientPayload, tallyPayload, authPayload]) => {
+    Promise.all([fetchLedgers(), fetchClients(), fetchTallyStatus()])
+      .then(([ledgerPayload, clientPayload, tallyPayload]) => {
         if (!active) return;
         setLedgerHeads(ledgerPayload.ledgerHeads || []);
         setClients(clientPayload.clients || []);
         setTallyStatus(tallyPayload);
-        setAuthUsers(authPayload.users || []);
         setSettingsForm((current) => ({
           ...current,
           companyName: tallyPayload.tallyCompany || "",
@@ -1119,6 +1232,7 @@ export default function App() {
     event.preventDefault();
     setAuthBusy(true);
     setAuthError("");
+    setAuthMessage("");
 
     try {
       const payload = await loginUser(authForm.email, authForm.password);
@@ -1132,9 +1246,60 @@ export default function App() {
     }
   }
 
+  async function handleSignUp(event) {
+    event.preventDefault();
+    setAuthBusy(true);
+    setAuthError("");
+    setAuthMessage("");
+
+    try {
+      const payload = await signupUser(authForm.name, authForm.email, authForm.password);
+      setAuthUser(payload.user);
+      window.localStorage.setItem("tally-ai-session", JSON.stringify(payload));
+      addToast(`Account created for ${payload.user.name}.`, "success");
+    } catch (error) {
+      setAuthError(error.message);
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleForgotPassword(event) {
+    event.preventDefault();
+    setAuthBusy(true);
+    setAuthError("");
+    setAuthMessage("");
+
+    try {
+      if (!authForm.resetToken.trim()) {
+        const payload = await requestPasswordReset(authForm.email);
+        setAuthMessage(
+          payload.resetToken
+            ? `${payload.message} Your reset code is ${payload.resetToken}.`
+            : payload.message
+        );
+        setAuthForm((current) => ({
+          ...current,
+          resetToken: payload.resetToken || "",
+        }));
+      } else {
+        const payload = await resetPassword(authForm.resetToken, authForm.newPassword);
+        setAuthMessage(payload.message);
+        setAuthMode("signin");
+        setAuthForm((current) => ({ ...current, password: "", newPassword: "", resetToken: "" }));
+      }
+    } catch (error) {
+      setAuthError(error.message);
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
   function handleSignOut() {
     setAuthUser(null);
-    setAuthForm({ email: "", password: "" });
+    setAuthMode("signin");
+    setAuthForm({ name: "", email: "", password: "", newPassword: "", resetToken: "" });
+    setAuthMessage("");
     window.localStorage.removeItem("tally-ai-session");
     addToast("Signed out successfully.", "info");
   }
@@ -1443,12 +1608,14 @@ export default function App() {
   if (!authUser) {
     return (
       <SignInPage
-        users={authUsers}
+        mode={authMode}
+        setMode={setAuthMode}
         form={authForm}
         setForm={setAuthForm}
         error={authError}
         busy={authBusy}
-        onSubmit={handleSignIn}
+        message={authMessage}
+        onSubmit={authMode === "signup" ? handleSignUp : authMode === "forgot" ? handleForgotPassword : handleSignIn}
       />
     );
   }

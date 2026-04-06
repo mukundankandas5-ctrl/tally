@@ -6,6 +6,8 @@ server/dist
 server/.env
 *.log
 .DS_Store
+server/src/data/*.db
+server/src/data/*.db-*
 
 .env
 

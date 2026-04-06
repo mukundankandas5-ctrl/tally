@@ -35,16 +35,6 @@ An accountant-friendly full-stack web app that automates:
 
 4. Open [http://localhost:5173](http://localhost:5173).
 
-## Prototype Mode
-
-If you just want to click through the product quickly:
-
-1. Run `npm run dev`
-2. Open [http://localhost:5173](http://localhost:5173)
-3. Use the `Load Demo Data` button in either workflow
-
-You do not need an Anthropic API key for demo mode unless you want real extraction/classification.
-
 ## Hosting
 
 The simplest hosting path for this app is a single Node web service on Render, because the Express backend already serves the built React frontend.
@@ -81,6 +71,16 @@ That means:
 - but learned bank mapping memory may not persist reliably forever unless we move it to a database or persistent disk
 
 If you want, the next step can be making the learning memory production-safe with SQLite, Postgres, or Render persistent disk.
+
+## Authentication Storage
+
+The app now uses a SQLite database for public user sign-up and sign-in.
+
+- user accounts are stored in `server/src/data/app.db`
+- passwords are hashed before storage
+- password resets use short-lived reset codes
+
+For a larger production rollout, the next step would be moving from local SQLite disk to a managed database such as Postgres.
 
 ## Environment Variables
 

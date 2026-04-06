@@ -60,6 +60,30 @@ export async function loginUser(email, password) {
   });
 }
 
+export async function signupUser(name, email, password) {
+  return fetchJson("/api/auth/signup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, email, password }),
+  });
+}
+
+export async function requestPasswordReset(email) {
+  return fetchJson("/api/auth/request-password-reset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function resetPassword(token, newPassword) {
+  return fetchJson("/api/auth/reset-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, newPassword }),
+  });
+}
+
 export async function fetchTallyStatus() {
   return fetchJson("/api/tally-status");
 }
