@@ -199,7 +199,86 @@ function buildRecommendationStatement(payload = {}) {
   };
 }
 
+async function reviseRecommendations(payload = {}, userInstructions = "", context = {}) {
+  const mappings = Array.isArray(payload.mappings) ? payload.mappings : [];
+  if (mappings.length === 0) return payload;
+
+  const safeInstructions = cleanString(userInstructions).slice(0, 4000);
+  if (!safeInstructions) return payload;
+
+  const ledgerOptions = ledgerHeads.map((item) => item.name).join(", ");
+  const result = await requestStructuredJson({
+    systemPrompt: [
+      "You are an expert Indian accounting assistant revising bulk transaction mappings and suggestions.",
+      "You will receive the current mappings (narration, current ledger, and voucher type) plus user instructions.",
+      "Return JSON only with this exact shape:",
+      "{",
+      '  "suggestions": [',
+      '    {"id":"","ledgerHead":"","voucherType":"Payment|Receipt|Contra","confidence":"high|medium|low","rationale":""}',
+      "  ]",
+      "}",
+      `Choose ledgerHead only from this list: ${ledgerOptions}`,
+      "Apply changes only where the user's instructions require it.",
+    ].join("\n"),
+    contentBlocks: [
+      {
+        type: "text",
+        text: `Current mappings:\n${JSON.stringify(
+          mappings.map((m) => ({
+            id: m.id,
+            description: m.description,
+            ledgerHead: m.suggestion?.ledgerHead,
+            voucherType: m.suggestion?.voucherType,
+          })),
+          null,
+          2
+        )}`,
+      },
+      {
+        type: "text",
+        text: `User instructions:\n${safeInstructions}`,
+      },
+    ],
+    maxTokens: 4096,
+  });
+
+  const aiSuggestions = Array.isArray(result?.suggestions) ? result.suggestions : [];
+  const aiById = new Map(aiSuggestions.map((s) => [s.id, s]));
+
+  const nextMappings = mappings.map((row) => {
+    const ai = aiById.get(row.id);
+    if (!ai) return row;
+
+    const suggestion = {
+      ...row.suggestion,
+      ledgerHead: cleanString(ai.ledgerHead) || row.suggestion.ledgerHead,
+      voucherType: cleanString(ai.voucherType) || row.suggestion.voucherType,
+      confidence: cleanString(ai.confidence) || row.suggestion.confidence,
+      rationale: cleanString(ai.rationale) || row.suggestion.rationale,
+      source: "anthropic",
+    };
+
+    return {
+      ...row,
+      suggestion,
+      accepted: suggestion.confidence !== "low",
+    };
+  });
+
+  return {
+    ...payload,
+    mappings: nextMappings,
+    summary: {
+      totalRows: nextMappings.length,
+      acceptedCount: nextMappings.filter((m) => m.accepted).length,
+      needsReviewCount: nextMappings.filter((m) => m.suggestion.confidence === "low").length,
+    },
+  };
+}
+
 module.exports = {
   analyzeRecommendations,
   buildRecommendationStatement,
+  reviseRecommendations,
 };
+

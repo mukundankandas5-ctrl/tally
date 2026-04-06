@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, Notification } = require("electron");
 const Store = require("electron-store");
 const axios = require("axios");
 const WebSocket = require("ws");
@@ -48,6 +48,7 @@ let tallyConnected = false;
 let tallyCompany = "";
 let lastHeartbeatAt = 0;
 let lastConnectorMessage = "Starting connector";
+let hasShownTrayNotice = false;
 
 function getDeviceId() {
   let deviceId = store.get("deviceId");
@@ -221,10 +222,14 @@ function renderWindowHtml(mode) {
             </label>
             <div style="display:flex;gap:12px;">
               <button class="button primary" type="submit">${isSetup ? "Pair Connector" : "Save Settings"}</button>
-              <button class="button secondary" id="closeButton" type="button">Close</button>
+              <button class="button secondary" id="closeButton" type="button">Minimize to Tray</button>
+              <button class="button secondary" id="quitButton" type="button" style="color:#fca5a5;border-color:rgba(252,165,165,0.2);">Quit App</button>
             </div>
             <div id="message" style="min-height:20px;font-size:13px;color:#fca5a5;"></div>
           </form>
+          <div style="margin-top:16px;font-size:12px;color:#94a3b8;line-height:1.5;">
+            Tip: Closing this window will keep the connector running in your system tray so Tally can stay synced. Use "Quit App" to fully exit.
+          </div>
 
           <div class="status">
             <div class="pill"><span>Device ID:</span><strong id="deviceId"></strong></div>
@@ -258,6 +263,7 @@ function renderWindowHtml(mode) {
           });
 
           document.getElementById("closeButton").addEventListener("click", function() { window.connectorApi.closeWindow(); });
+          document.getElementById("quitButton").addEventListener("click", function() { if(confirm("Are you sure you want to stop the connector and Tally sync?")) { window.connectorApi.quitApp(); } });
         })();
       </script>
     </body>
@@ -567,6 +573,7 @@ if (gotTheLock) {
     if (!store.get("deviceToken") || !getBackendUrl()) {
       openSettingsWindow("setup");
     } else {
+      openStatusWindow();
       connectSocket();
     }
   });
@@ -583,7 +590,21 @@ if (gotTheLock) {
   });
   ipcMain.handle("connector:close-window", function (event) {
     var win = BrowserWindow.fromWebContents(event.sender);
-    if (win) win.hide();
+    if (win) {
+      win.hide();
+      if (!hasShownTrayNotice && Notification.isSupported()) {
+        new Notification({
+          title: "Tally AI Connector",
+          body: "The connector is still running in the background tray.",
+          silent: true,
+        }).show();
+        hasShownTrayNotice = true;
+      }
+    }
+  });
+
+  ipcMain.handle("connector:quit-app", function () {
+    app.quit();
   });
 
   ipcMain.handle("connector:open-external", function (event, url) {

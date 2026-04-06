@@ -47,6 +47,7 @@ import {
   restoreAuthUser,
   reviseBankStatement,
   reviseInvoice,
+  reviseRecommendations,
   signupUser,
   testTallyConnection,
   uploadBankStatementsBulk,
@@ -1532,7 +1533,9 @@ export default function App() {
       };
       const revised = await reviseBankStatement(statementPayload, bankHint);
       setBankStatement(revised);
-      setBankRows(normalizeBankRows(revised));
+      const nextRows = normalizeBankRows(revised);
+      setBankRows(nextRows);
+      withFlash(nextRows.map((row) => row.id));
       addToast("Updated classifications using your instruction.", "success");
     });
   }
@@ -1542,7 +1545,9 @@ export default function App() {
     await withBusy("invoice-revise", async () => {
       const revised = await reviseInvoice(invoice, invoiceHint);
       setInvoice(revised);
-      setInvoiceRows(normalizeInvoiceRows(revised));
+      const nextRows = normalizeInvoiceRows(revised);
+      setInvoiceRows(nextRows);
+      withFlash(nextRows.map((row) => row.id));
       addToast("Updated invoice extraction using your instruction.", "success");
     });
   }
@@ -1575,19 +1580,16 @@ export default function App() {
     });
   }
 
-  function handleRecommendationHintApply() {
+  async function handleRecommendationHintApply() {
     if (!recommendationHint.trim()) return;
-    const lowered = recommendationHint.toLowerCase();
-    setRecommendationRows((current) =>
-      current.map((row) => {
-        if (lowered.includes("remittance") && row.particulars.toLowerCase().includes("upi")) {
-          return { ...row, ledger: "Remittance", status: "resolved" };
-        }
-        return row;
-      })
-    );
-    withFlash(recommendationRows.filter((row) => row.particulars.toLowerCase().includes("upi")).map((row) => row.id));
-    addToast("Applied table-side mapping hint to visible recommendations.", "success");
+    await withBusy("recommendation-revise", async () => {
+      const payload = await reviseRecommendations(recommendations, recommendationHint, bankProcessingConfig);
+      setRecommendations(payload);
+      const nextRows = normalizeRecommendationRows(payload);
+      setRecommendationRows(nextRows);
+      withFlash(nextRows.map((row) => row.id));
+      addToast("Updated suggestions using your instruction.", "success");
+    });
   }
 
   function approveSelected(setter, selected, ledgerOrResolved = "resolved") {

@@ -280,3 +280,12 @@ export async function reviseInvoice(invoice, userInstructions) {
     body: JSON.stringify({ invoice, userInstructions }),
   });
 }
+
+export async function reviseRecommendations(payload, userInstructions, context = {}) {
+  return fetchJson("/api/recommendations/revise", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ payload, userInstructions, context }),
+  });
+}
+

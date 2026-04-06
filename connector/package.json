@@ -37,9 +37,11 @@
       "oneClick": true,
       "perMachine": false,
       "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Tally AI Connector"
+      "shortcutName": "Tally AI Connector",
+      "uninstallDisplayName": "Tally AI Connector"
     }
   }
 }
