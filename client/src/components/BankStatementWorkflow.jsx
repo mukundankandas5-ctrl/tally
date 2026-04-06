@@ -3,7 +3,7 @@ import ConfidenceBadge from "./ConfidenceBadge";
 import FileDropzone from "./FileDropzone";
 import SectionCard from "./SectionCard";
 import StatCard from "./StatCard";
-import { createDemoBankStatement } from "../constants/sampleData";
+
 import { downloadBlob } from "../utils/download";
 import { exportBankStatement, learnBankStatement, reviseBankStatement, uploadBankStatement } from "../utils/api";
 import { formatCurrency, formatDate } from "../utils/formatters";
@@ -110,12 +110,7 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
     }
   };
 
-  const handleLoadDemo = () => {
-    setError("");
-    setSuccessMessage("");
-    setSelectedFile(null);
-    setStatement(createDemoBankStatement(statement.tallyConfig));
-  };
+
 
     const updateTransaction = (transactionId, field, value) => {
       setStatement((current) => ({
@@ -234,15 +229,7 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
         title="Bank Statement Ledger Mapper"
         subtitle="Upload a monthly bank statement PDF, review ledger classification transaction by transaction, then export Payment, Receipt, and Contra vouchers."
         actions={
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={handleLoadDemo}
-              className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-            >
-              Load Demo Data
-            </button>
-            <button
+          <button
               type="button"
               onClick={handleAnalyze}
               disabled={isUploading}
@@ -250,12 +237,11 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
             >
               {isUploading ? "Analyzing..." : "Analyze Statement"}
             </button>
-          </div>
         }
       >
         <FileDropzone
           title="Bank statement upload"
-          description="Supports text-based PDF statements from SBI, HDFC, ICICI, Axis, and similar Indian bank formats. For a quick prototype, skip the upload and click Load Demo Data."
+          description="Supports text-based PDF statements from SBI, HDFC, ICICI, Axis, and similar Indian bank formats. Upload a file and click Analyze Statement to begin."
           accept=".pdf"
           selectedFile={selectedFile}
           onFileSelected={setSelectedFile}

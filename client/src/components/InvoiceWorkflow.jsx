@@ -3,7 +3,7 @@ import ConfidenceBadge from "./ConfidenceBadge";
 import FileDropzone from "./FileDropzone";
 import SectionCard from "./SectionCard";
 import StatCard from "./StatCard";
-import { createDemoInvoice } from "../constants/sampleData";
+
 import { downloadBlob } from "../utils/download";
 import { exportInvoice, reviseInvoice, uploadInvoice } from "../utils/api";
 import { formatCurrency, formatNumber } from "../utils/formatters";
@@ -79,11 +79,7 @@ export default function InvoiceWorkflow({ defaults, initialState }) {
     }
   };
 
-  const handleLoadDemo = () => {
-    setError("");
-    setSelectedFile(null);
-    setInvoice(createDemoInvoice(defaults));
-  };
+
 
   const updateInvoiceField = (field, value) => {
     setInvoice((current) =>
@@ -192,15 +188,7 @@ export default function InvoiceWorkflow({ defaults, initialState }) {
         title="Invoice Processor"
         subtitle="Upload a photographed or scanned invoice, review Claude’s extracted fields, then export a Tally Purchase voucher XML."
         actions={
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={handleLoadDemo}
-              className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-            >
-              Load Demo Data
-            </button>
-            <button
+          <button
               type="button"
               onClick={handleExtract}
               disabled={isUploading}
@@ -208,12 +196,11 @@ export default function InvoiceWorkflow({ defaults, initialState }) {
             >
               {isUploading ? "Extracting..." : "Extract Invoice"}
             </button>
-          </div>
         }
       >
         <FileDropzone
           title="Invoice upload"
-          description="Supports JPG, PNG, and PDF invoices. For a quick prototype, skip the upload and click Load Demo Data."
+          description="Supports JPG, PNG, and PDF invoices. Upload a file and click Extract Invoice to begin."
           accept=".jpg,.jpeg,.png,.pdf"
           selectedFile={selectedFile}
           onFileSelected={setSelectedFile}
