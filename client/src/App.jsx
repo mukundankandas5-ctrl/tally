@@ -78,7 +78,7 @@ const statusBadgeStyles = {
 };
 
 const voucherOptions = ["Payment", "Receipt", "Contra", "Purchase", "Journal"];
-const bankOptions = ["Kotak Mahindra Bank", "HDFC Bank", "ICICI Bank", "Axis Bank", "SBI", "Yes Bank", "IDFC First Bank"];
+const bankOptions = ["Kotak Mahindra Bank", "HDFC Bank", "ICICI Bank", "Axis Bank", "SBI", "Union Bank of India", "Yes Bank", "IDFC First Bank"];
 
 const createId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 

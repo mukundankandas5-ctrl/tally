@@ -1,4 +1,5 @@
 const Anthropic = require("@anthropic-ai/sdk");
+const { jsonrepair } = require("jsonrepair");
 const env = require("../config/env");
 const AppError = require("../utils/appError");
 
@@ -68,10 +69,11 @@ async function requestStructuredJson({ systemPrompt, contentBlocks, maxTokens = 
     return JSON.parse(jsonText);
   } catch (error) {
     try {
-      // Attempt to repair common LLM JSON syntax errors (e.g. trailing commas)
-      const repairedJsonText = jsonText.replace(/,\s*([\]}])/g, '$1');
+      // Attempt to repair common LLM JSON syntax errors (trailing commas, unescaped quotes, etc.)
+      const repairedJsonText = jsonrepair(jsonText);
       return JSON.parse(repairedJsonText);
     } catch (repairError) {
+      console.error("RAW CLAUDE RESPONSE ALERTS:", { rawText, parseError: error.message, repairError: repairError.message });
       throw new AppError("Claude returned invalid JSON.", 502, {
         rawResponse: rawText,
         parseError: error.message,

@@ -5,6 +5,24 @@ const WebSocket = require("ws");
 const { v4: uuidv4 } = require("uuid");
 const path = require("path");
 
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (statusWindow) {
+      if (statusWindow.isMinimized()) statusWindow.restore();
+      statusWindow.focus();
+    } else if (settingsWindow) {
+      if (settingsWindow.isMinimized()) settingsWindow.restore();
+      settingsWindow.focus();
+    } else {
+      openStatusWindow();
+    }
+  });
+}
+
 const store = new Store({
   defaults: {
     deviceId: "",
@@ -541,26 +559,34 @@ function createTray() {
   updateTray();
 }
 
-app.whenReady().then(function() {
-  createTray();
-  updateStartupSetting();
+if (gotTheLock) {
+  app.whenReady().then(function () {
+    createTray();
+    updateStartupSetting();
 
-  if (!store.get("deviceToken") || !getBackendUrl()) {
-    openSettingsWindow("setup");
-  } else {
-    connectSocket();
-  }
-});
+    if (!store.get("deviceToken") || !getBackendUrl()) {
+      openSettingsWindow("setup");
+    } else {
+      connectSocket();
+    }
+  });
 
-app.on("window-all-closed", function(event) {
-  event.preventDefault();
-});
+  app.on("window-all-closed", function (event) {
+    event.preventDefault();
+  });
 
-ipcMain.handle("connector:get-state", function() { return getStatusSnapshot(); });
-ipcMain.handle("connector:save-settings", function(event, payload) { return pairConnector(payload); });
-ipcMain.handle("connector:close-window", function(event) {
-  var win = BrowserWindow.fromWebContents(event.sender);
-  if (win) win.hide();
-});
+  ipcMain.handle("connector:get-state", function () {
+    return getStatusSnapshot();
+  });
+  ipcMain.handle("connector:save-settings", function (event, payload) {
+    return pairConnector(payload);
+  });
+  ipcMain.handle("connector:close-window", function (event) {
+    var win = BrowserWindow.fromWebContents(event.sender);
+    if (win) win.hide();
+  });
 
-ipcMain.handle("connector:open-external", function(event, url) { return shell.openExternal(url); });
+  ipcMain.handle("connector:open-external", function (event, url) {
+    return shell.openExternal(url);
+  });
+}

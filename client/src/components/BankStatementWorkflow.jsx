@@ -241,7 +241,7 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
       >
         <FileDropzone
           title="Bank statement upload"
-          description="Supports text-based PDF statements from SBI, HDFC, ICICI, Axis, and similar Indian bank formats. Upload a file and click Analyze Statement to begin."
+          description="Supports text-based PDF statements from Union Bank, SBI, HDFC, ICICI, Axis, and similar Indian bank formats. Upload a file and click Analyze Statement to begin."
           accept=".pdf"
           selectedFile={selectedFile}
           onFileSelected={setSelectedFile}
