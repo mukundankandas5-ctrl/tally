@@ -67,10 +67,17 @@ async function requestStructuredJson({ systemPrompt, contentBlocks, maxTokens = 
   try {
     return JSON.parse(jsonText);
   } catch (error) {
-    throw new AppError("Claude returned invalid JSON.", 502, {
-      rawResponse: rawText,
-      parseError: error.message,
-    });
+    try {
+      // Attempt to repair common LLM JSON syntax errors (e.g. trailing commas)
+      const repairedJsonText = jsonText.replace(/,\s*([\]}])/g, '$1');
+      return JSON.parse(repairedJsonText);
+    } catch (repairError) {
+      throw new AppError("Claude returned invalid JSON.", 502, {
+        rawResponse: rawText,
+        parseError: error.message,
+        repairedError: repairError.message,
+      });
+    }
   }
 }
 
