@@ -1,3 +1,12 @@
+import {
+  isSupabaseEnabled,
+  loginWithSupabase,
+  logoutSupabaseUser,
+  requestSupabasePasswordReset,
+  restoreSupabaseUser,
+  signupWithSupabase,
+} from "./authClient";
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
 async function readError(response) {
@@ -79,6 +88,9 @@ export async function fetchAuthUsers() {
 }
 
 export async function loginUser(email, password) {
+  if (isSupabaseEnabled()) {
+    return loginWithSupabase(email, password);
+  }
   return fetchJson("/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -87,6 +99,9 @@ export async function loginUser(email, password) {
 }
 
 export async function signupUser(name, email, password) {
+  if (isSupabaseEnabled()) {
+    return signupWithSupabase(name, email, password);
+  }
   return fetchJson("/api/auth/signup", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -95,6 +110,9 @@ export async function signupUser(name, email, password) {
 }
 
 export async function requestPasswordReset(email) {
+  if (isSupabaseEnabled()) {
+    return requestSupabasePasswordReset(email);
+  }
   return fetchJson("/api/auth/request-password-reset", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -103,11 +121,27 @@ export async function requestPasswordReset(email) {
 }
 
 export async function resetPassword(token, newPassword) {
+  if (isSupabaseEnabled()) {
+    throw new Error("Use the password reset link from your email when Supabase Auth is enabled.");
+  }
   return fetchJson("/api/auth/reset-password", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token, newPassword }),
   });
+}
+
+export async function restoreAuthUser() {
+  if (isSupabaseEnabled()) {
+    return restoreSupabaseUser();
+  }
+  return null;
+}
+
+export async function logoutUser() {
+  if (isSupabaseEnabled()) {
+    await logoutSupabaseUser();
+  }
 }
 
 export async function fetchTallyStatus() {

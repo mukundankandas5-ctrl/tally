@@ -44,6 +44,7 @@ import {
   reconcileGst,
   requestPasswordReset,
   resetPassword,
+  restoreAuthUser,
   reviseBankStatement,
   reviseInvoice,
   signupUser,
@@ -51,7 +52,9 @@ import {
   uploadBankStatementsBulk,
   uploadBankStatement,
   uploadInvoice,
+  logoutUser,
 } from "./utils/api";
+import { isSupabaseEnabled } from "./utils/authClient";
 import { formatCurrency, formatDate, formatNumber } from "./utils/formatters";
 
 const SIDEBAR_WIDTH = 220;
@@ -542,7 +545,7 @@ function EditableAmountInput({ value, onChange, tone }) {
   );
 }
 
-function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubmit, showPassword, setShowPassword }) {
+function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubmit, showPassword, setShowPassword, supabaseEnabled }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-[linear-gradient(135deg,#1E1B4B_0%,#312E81_52%,#7C3AED_100%)] px-4 py-10">
       <div className="grid w-full max-w-[1080px] overflow-hidden rounded-[28px] bg-white shadow-[0_30px_80px_rgba(15,23,42,0.28)] lg:grid-cols-[0.95fr_1.05fr]">
@@ -559,7 +562,9 @@ function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubm
               {mode === "signup"
                 ? "Create a user account to access bank processing, invoice review, GST reconciliation, and Tally sync actions."
                 : mode === "forgot"
-                  ? "Reset your password and continue back into the accounting workspace."
+                  ? supabaseEnabled
+                    ? "Request a password reset email and continue back into the accounting workspace."
+                    : "Reset your password and continue back into the accounting workspace."
                   : "Sign in with your email and password to continue into the accounting workspace."}
             </p>
           </div>
@@ -583,7 +588,9 @@ function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubm
               {mode === "signup"
                 ? "Create an account to access the dashboard."
                 : mode === "forgot"
-                  ? "Request a reset code, then use it to set a new password."
+                  ? supabaseEnabled
+                    ? "Enter your email and we will send a password reset link."
+                    : "Request a reset code, then use it to set a new password."
                   : "Enter your email and password to access the dashboard."}
             </p>
 
@@ -612,6 +619,7 @@ function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubm
                 />
               </label>
 
+              {mode !== "forgot" || !supabaseEnabled ? (
               <label className="block">
                 <div className="mb-2 text-sm font-medium text-[#374151]">
                   {mode === "forgot" ? "New Password" : "Password"}
@@ -638,8 +646,9 @@ function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubm
                   </button>
                 </div>
               </label>
+              ) : null}
 
-              {mode === "forgot" ? (
+              {mode === "forgot" && !supabaseEnabled ? (
                 <label className="block">
                   <div className="mb-2 text-sm font-medium text-[#374151]">Reset Code</div>
                   <input
@@ -668,16 +677,20 @@ function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubm
                   ? mode === "signup"
                     ? "Creating account..."
                     : mode === "forgot"
-                      ? form.resetToken
-                        ? "Updating password..."
-                        : "Generating reset code..."
+                      ? supabaseEnabled
+                        ? "Sending reset email..."
+                        : form.resetToken
+                          ? "Updating password..."
+                          : "Generating reset code..."
                       : "Signing in..."
                   : mode === "signup"
                     ? "Sign Up"
                     : mode === "forgot"
-                      ? form.resetToken
-                        ? "Update Password"
-                        : "Generate Reset Code"
+                      ? supabaseEnabled
+                        ? "Send Reset Email"
+                        : form.resetToken
+                          ? "Update Password"
+                          : "Generate Reset Code"
                       : "Sign In"}
               </Button>
             </form>
@@ -1091,6 +1104,7 @@ function SpeedyGroupPanel({ groups, ledgerOptions, onApproveGroup, onMarkGroupUn
 }
 
 export default function App() {
+  const supabaseEnabled = isSupabaseEnabled();
   const [authMode, setAuthMode] = useState("signin");
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "", newPassword: "", resetToken: "" });
   const [showPassword, setShowPassword] = useState(false);
@@ -1182,6 +1196,21 @@ export default function App() {
     };
     window.addEventListener("resize", handler);
     return () => window.removeEventListener("resize", handler);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    restoreAuthUser()
+      .then((payload) => {
+        if (!active || !payload?.user) return;
+        setAuthUser(payload.user);
+        window.localStorage.setItem("tally-ai-session", JSON.stringify(payload));
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -1326,9 +1355,14 @@ export default function App() {
 
     try {
       const payload = await signupUser(authForm.name, authForm.email, authForm.password);
-      setAuthUser(payload.user);
-      window.localStorage.setItem("tally-ai-session", JSON.stringify(payload));
-      addToast(`Account created for ${payload.user.name}.`, "success");
+      if (payload.sessionToken) {
+        setAuthUser(payload.user);
+        window.localStorage.setItem("tally-ai-session", JSON.stringify(payload));
+        addToast(`Account created for ${payload.user.name}.`, "success");
+      } else {
+        setAuthMessage(payload.message || "Account created. Check your email to confirm your account.");
+        setAuthMode("signin");
+      }
     } catch (error) {
       setAuthError(error.message);
     } finally {
@@ -1343,7 +1377,10 @@ export default function App() {
     setAuthMessage("");
 
     try {
-      if (!authForm.resetToken.trim()) {
+      if (supabaseEnabled) {
+        const payload = await requestPasswordReset(authForm.email);
+        setAuthMessage(payload.message);
+      } else if (!authForm.resetToken.trim()) {
         const payload = await requestPasswordReset(authForm.email);
         setAuthMessage(
           payload.resetToken
@@ -1368,6 +1405,7 @@ export default function App() {
   }
 
   function handleSignOut() {
+    logoutUser().catch(() => {});
     setAuthUser(null);
     setAuthMode("signin");
     setAuthForm({ name: "", email: "", password: "", newPassword: "", resetToken: "" });
@@ -1778,6 +1816,7 @@ export default function App() {
         onSubmit={authMode === "signup" ? handleSignUp : authMode === "forgot" ? handleForgotPassword : handleSignIn}
         showPassword={showPassword}
         setShowPassword={setShowPassword}
+        supabaseEnabled={supabaseEnabled}
       />
     );
   }
