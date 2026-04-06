@@ -60,7 +60,17 @@ db.exec(`
     FOREIGN KEY (client_id) REFERENCES clients(id)
   );
 `);
+// One-time cleanup: purge previously seeded demo data from deployed databases
+const seedClientIds = ["aurora", "bluewave", "greenleaf"];
+const seedDocRequestIds = ["doc-aurora-q4-bank", "doc-bluewave-gst"];
 
+db.prepare(
+  `DELETE FROM document_requests WHERE id IN (${seedDocRequestIds.map(() => "?").join(",")})`
+).run(...seedDocRequestIds);
+
+db.prepare(
+  `DELETE FROM clients WHERE id IN (${seedClientIds.map(() => "?").join(",")})`
+).run(...seedClientIds);
 
 
 function sanitizeUser(row) {
