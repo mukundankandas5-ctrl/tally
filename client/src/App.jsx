@@ -2501,46 +2501,68 @@ function GstPage({ report, onReconcile }) {
         <Button variant="primary" className="w-full justify-center" disabled={!files.gstr2b || !files.purchaseRegister} onClick={() => onReconcile(files.gstr2b, files.purchaseRegister)}>
           Reconcile
         </Button>
+        <div className="rounded-xl border border-[#E5E7EB] bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+          <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7C3AED]">Supported Headers</div>
+          <div className="mt-3 space-y-2 text-[11px] text-[#6B7280]">
+            <div><strong>Invoice:</strong> Vch No, Voucher No, Invoice No, Bill No</div>
+            <div><strong>GSTIN:</strong> GSTIN of supplier, Registration No, Registration Number</div>
+            <div><strong>Amount:</strong> Taxable Value, CGST, SGST, IGST, Total Amount</div>
+          </div>
+        </div>
       </div>
       <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-        <div className="grid gap-4 border-b border-[#E5E7EB] px-5 py-4 md:grid-cols-5">
-          <StatMini label="Matched" value={formatNumber(report.summary.matched)} tone="text-[#16A34A]" />
-          <StatMini label="Partial" value={formatNumber(report.summary.partial)} tone="text-[#D97706]" />
-          <StatMini label="Unmatched" value={formatNumber(report.summary.unmatched)} tone="text-[#DC2626]" />
-          <StatMini label="Duplicate" value={formatNumber(report.summary.duplicateInvoices || 0)} tone="text-[#DC2626]" />
-          <StatMini label="Missing GSTIN" value={formatNumber(report.summary.missingGstin || 0)} tone="text-[#D97706]" />
-        </div>
-        <div className="border-b border-[#E5E7EB] px-5 py-4 text-sm text-[#4B5563]">
-          Exact match rate: <span className="font-semibold text-[#111827]">{report.summary.exactMatchRate || 0}%</span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-[#F9FAFB] text-left text-xs uppercase tracking-[0.08em] text-[#6B7280]">
-              <tr>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Invoice</th>
-                <th className="px-4 py-3 font-medium">GSTIN</th>
-                <th className="px-4 py-3 font-medium">Amount</th>
-                <th className="px-4 py-3 font-medium">Risk Bucket</th>
-                <th className="px-4 py-3 font-medium">Reason</th>
-              </tr>
-            </thead>
-            <tbody>
-              {report.rows.map((row) => (
-                <tr key={row.id} className="border-b border-[#F3F4F6] bg-white hover:bg-[#F9FAFB]">
-                  <td className="px-4 py-3">
-                    <Badge status={row.status === "matched" ? "resolved" : row.status === "partial" ? "pending" : "failed"} confidence="medium" />
-                  </td>
-                  <td className="px-4 py-3">{row.invoiceNumber}</td>
-                  <td className="px-4 py-3">{row.gstin || "—"}</td>
-                  <td className="px-4 py-3">{formatCurrency(row.totalAmount)}</td>
-                  <td className="px-4 py-3">{row.riskBucket || "—"}</td>
-                  <td className="px-4 py-3 text-[#6B7280]">{row.mismatchReason}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        {report.summary.total > 0 ? (
+          <>
+            <div className="grid gap-4 border-b border-[#E5E7EB] px-5 py-4 md:grid-cols-5">
+              <StatMini label="Matched" value={formatNumber(report.summary.matched)} tone="text-[#16A34A]" />
+              <StatMini label="Partial" value={formatNumber(report.summary.partial)} tone="text-[#D97706]" />
+              <StatMini label="Unmatched" value={formatNumber(report.summary.unmatched)} tone="text-[#DC2626]" />
+              <StatMini label="Duplicate" value={formatNumber(report.summary.duplicateInvoices || 0)} tone="text-[#DC2626]" />
+              <StatMini label="Missing GSTIN" value={formatNumber(report.summary.missingGstin || 0)} tone="text-[#D97706]" />
+            </div>
+            <div className="border-b border-[#E5E7EB] px-5 py-4 text-sm text-[#4B5563]">
+              Exact match rate: <span className="font-semibold text-[#111827]">{report.summary.exactMatchRate || 0}%</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-[#F9FAFB] text-left text-xs uppercase tracking-[0.08em] text-[#6B7280]">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">Status</th>
+                    <th className="px-4 py-3 font-medium">Invoice</th>
+                    <th className="px-4 py-3 font-medium">GSTIN</th>
+                    <th className="px-4 py-3 font-medium">Amount</th>
+                    <th className="px-4 py-3 font-medium">Risk Bucket</th>
+                    <th className="px-4 py-3 font-medium">Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.rows.map((row) => (
+                    <tr key={row.id} className="border-b border-[#F3F4F6] bg-white hover:bg-[#F9FAFB]">
+                      <td className="px-4 py-3">
+                        <Badge status={row.status === "matched" ? "resolved" : row.status === "partial" ? "pending" : "failed"} confidence="medium" />
+                      </td>
+                      <td className="px-4 py-3">{row.invoiceNumber}</td>
+                      <td className="px-4 py-3">{row.gstin || "—"}</td>
+                      <td className="px-4 py-3">{formatCurrency(row.totalAmount)}</td>
+                      <td className="px-4 py-3">{row.riskBucket || "—"}</td>
+                      <td className="px-4 py-3 text-[#6B7280]">{row.mismatchReason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <div className="flex flex-col items-center justify-center p-12 text-center">
+            <div className="rounded-full bg-[#F3F4F6] p-4">
+              <ShieldCheck className="h-8 w-8 text-[#9CA3AF]" />
+            </div>
+            <div className="mt-4 text-lg font-semibold text-[#111827]">No reconciliation data yet</div>
+            <p className="mt-2 text-sm text-[#6B7280]">
+              Upload your GSTR-2B and Purchase Register files to start the reconciliation process.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

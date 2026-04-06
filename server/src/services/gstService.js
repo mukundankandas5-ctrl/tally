@@ -3,15 +3,15 @@ const XLSX = require("xlsx");
 const AppError = require("../utils/appError");
 const { cleanString, toFixedAmount, toIsoDate, toNumber } = require("../utils/normalizers");
 
-const invoiceKeys = ["invoice number", "invoice no", "invoice", "bill no"];
-const gstinKeys = ["gstin", "supplier gstin", "vendor gstin"];
-const taxableKeys = ["taxable value", "taxable amount", "subtotal"];
-const cgstKeys = ["cgst"];
-const sgstKeys = ["sgst"];
-const igstKeys = ["igst"];
-const totalKeys = ["total", "invoice value", "gross total", "amount"];
-const vendorKeys = ["vendor", "supplier", "party name"];
-const dateKeys = ["date", "invoice date"];
+const invoiceKeys = ["invoice number", "invoice no", "invoice", "bill no", "vch no", "voucher number", "external id", "bill number", "invoice number of supplier", "document number"];
+const gstinKeys = ["gstin", "supplier gstin", "vendor gstin", "registration number", "uident", "gstin of supplier"];
+const taxableKeys = ["taxable value", "taxable amount", "subtotal", "taxable value as per portal"];
+const cgstKeys = ["cgst", "central tax"];
+const sgstKeys = ["sgst", "state tax"];
+const igstKeys = ["igst", "integrated tax"];
+const totalKeys = ["total", "invoice value", "gross total", "amount", "invoice value as per portal"];
+const vendorKeys = ["vendor", "supplier", "party name", "ledger name", "trade name", "supplier name"];
+const dateKeys = ["date", "invoice date", "document date"];
 
 function getValue(row, keys) {
   const key = Object.keys(row).find((candidate) => keys.includes(String(candidate).trim().toLowerCase()));
@@ -84,6 +84,15 @@ function amountDiff(first, second) {
 async function reconcileGstFiles(gstr2bFile, purchaseRegisterFile) {
   const gstrRows = (await readRows(gstr2bFile)).map(normalizeRow).filter((row) => row.invoiceNumber);
   const purchaseRows = (await readRows(purchaseRegisterFile)).map(normalizeRow).filter((row) => row.invoiceNumber);
+
+  if (gstrRows.length === 0) {
+    throw new AppError("GSTR-2B file contains no recognizable invoice numbers. Please check your column headers.", 400);
+  }
+
+  if (purchaseRows.length === 0) {
+    throw new AppError("Purchase Register file contains no recognizable invoice numbers. Please check your column headers.", 400);
+  }
+
   const seenPurchaseKeys = new Set();
   const duplicatePurchaseKeys = new Set();
 
