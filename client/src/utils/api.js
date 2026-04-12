@@ -207,11 +207,11 @@ export async function pushBankStatementToTally(statement, config) {
   });
 }
 
-export async function pushXmlToTally(xml) {
+export async function pushXmlToTally(xml, config = {}) {
   return fetchJson("/api/tally/push-xml", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ xml }),
+    body: JSON.stringify({ xml, config }),
   });
 }
 
@@ -235,7 +235,18 @@ export async function reconcileGst(gstr2bFile, purchaseRegisterFile) {
   const formData = new FormData();
   formData.append("gstr2b", gstr2bFile);
   formData.append("purchaseRegister", purchaseRegisterFile);
-  return postForm("/api/gst/reconcile", formData);
+  return apiRequest("/api/gst/reconcile", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export async function fetchActivity() {
+  return apiRequest("/api/activity/activities", { method: "GET" });
+}
+
+export async function fetchSyncHistory() {
+  return apiRequest("/api/activity/sync-history", { method: "GET" });
 }
 
 export async function downloadGstWorkbook(payload) {

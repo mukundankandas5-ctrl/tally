@@ -316,6 +316,28 @@ function getSyncHistory(limit = 50) {
   }));
 }
 
+function queuePendingPush({ clientId, type, payload }) {
+  const id = `push-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  db.prepare(
+    "INSERT INTO pending_push_queue (id, client_id, type, payload) VALUES (?, ?, ?, ?)"
+  ).run(id, clientId || null, type, JSON.stringify(payload));
+  return id;
+}
+
+function getPendingPushes(clientId) {
+  return db.prepare("SELECT * FROM pending_push_queue WHERE status = 'pending' AND (client_id = ? OR ? IS NULL) ORDER BY created_at ASC").all(clientId, clientId).map(row => ({
+    id: row.id,
+    clientId: row.client_id,
+    type: row.type,
+    payload: JSON.parse(row.payload),
+    createdAt: row.created_at
+  }));
+}
+
+function updatePendingPushStatus(id, status) {
+  db.prepare("UPDATE pending_push_queue SET status = ? WHERE id = ?").run(status, id);
+}
+
 module.exports = {
   createClient,
   createDocumentRequest,
@@ -337,4 +359,7 @@ module.exports = {
   getRecentActivities,
   recordSync,
   getSyncHistory,
+  queuePendingPush,
+  getPendingPushes,
+  updatePendingPushStatus,
 };

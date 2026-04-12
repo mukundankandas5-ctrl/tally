@@ -2,6 +2,7 @@ const WebSocket = require("ws");
 const { randomUUID } = require("crypto");
 const { cleanString } = require("../utils/normalizers");
 const { getDeviceByUserId, validateDeviceToken } = require("./deviceAuthStore");
+const { queuePendingPush } = require("../db/database");
 
 const connectedDevices = new Map();
 const pendingPushes = new Map();
@@ -162,7 +163,7 @@ function getDeviceStatusForUser(userId) {
   };
 }
 
-function queuePushToUserDevice(userId, xml) {
+function queuePushToUserDevice(userId, xml, options = {}) {
   const linkedDevice = getDeviceByUserId(userId);
   if (!linkedDevice) {
     const error = new Error("Tally not connected");
@@ -172,9 +173,16 @@ function queuePushToUserDevice(userId, xml) {
 
   const device = connectedDevices.get(linkedDevice.deviceId);
   if (!device || !device.ws || device.ws.readyState !== WebSocket.OPEN || !device.tallyConnected) {
-    const error = new Error("Tally not connected");
-    error.statusCode = 503;
-    throw error;
+    const entryId = queuePendingPush({
+      clientId: options.clientId || null,
+      type: options.type || "batch",
+      payload: { companyName: options.companyName || "", xml }
+    });
+
+    return {
+      entryId,
+      promise: Promise.resolve({ success: true, queued: true, message: "Offline. Added to pending queue.", entryId })
+    };
   }
 
   const entryId = randomUUID();

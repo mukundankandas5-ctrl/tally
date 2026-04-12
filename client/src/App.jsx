@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Sparkles,
   UserCircle2,
+  Users,
   X,
 } from "lucide-react";
 import { List } from "react-window";
@@ -32,9 +33,11 @@ import {
   createPairingCode,
   createDocumentRequest,
   downloadRecommendationXml,
+  fetchActivity,
   fetchClients,
   fetchDocumentRequests,
   fetchLedgers,
+  fetchSyncHistory,
   fetchTallyStatus,
   learnBankStatement,
   loginUser,
@@ -57,6 +60,8 @@ import {
 } from "./utils/api";
 import { isSupabaseEnabled } from "./utils/authClient";
 import { formatCurrency, formatDate, formatNumber } from "./utils/formatters";
+import { EmptyState } from "./components/EmptyState";
+import { OnboardingWizard } from "./components/OnboardingWizard";
 
 const SIDEBAR_WIDTH = 220;
 const SIDEBAR_COLLAPSED_WIDTH = 64;
@@ -64,6 +69,7 @@ const ROW_HEIGHT = 52;
 
 const navigation = [
   { id: "dashboard", label: "Dashboard", icon: Home },
+  { id: "clients", label: "Clients", icon: Users },
   { id: "bank", label: "Bank Statement", icon: Landmark },
   { id: "invoice", label: "Invoice Processor", icon: Receipt },
   { id: "recommendations", label: "Speedy Recommendations", icon: Sparkles },
@@ -337,47 +343,67 @@ function ToastStack({ toasts, onDismiss }) {
   );
 }
 
-function FileDropCard({ title, helper, accept, onSelect }) {
+// StepIndicator Component
+function StepIndicator({ currentStep, steps }) {
   return (
-    <label className="flex min-h-[140px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-[#D1D5DB] bg-[#F9FAFB] px-4 text-center">
-      <FileSpreadsheet className="h-7 w-7 text-[#7C3AED]" />
-      <div className="mt-3 text-sm font-semibold text-[#111827]">{title}</div>
-      <div className="mt-2 max-w-sm text-sm text-[#6B7280]">{helper}</div>
-      <div className="mt-4 rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-medium text-[#374151]">Choose file</div>
-      <input
-        className="hidden"
-        type="file"
-        accept={accept}
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) onSelect(file);
-          event.target.value = "";
-        }}
-      />
-    </label>
+    <div className="flex w-full items-center mb-6">
+      {steps.map((step, index) => {
+        const stepNum = index + 1;
+        const isActive = currentStep === stepNum;
+        const isComplete = currentStep > stepNum;
+        return (
+          <div key={step} className="flex flex-1 items-center last:flex-none">
+            <div className={cn("flex flex-col items-center", isComplete || isActive ? "text-[#7C3AED]" : "text-[#9CA3AF]")}>
+              <div className={cn("flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold border-2", isComplete ? "bg-[#7C3AED] border-[#7C3AED] text-white" : isActive ? "border-[#7C3AED] bg-white text-[#7C3AED]" : "border-[#E5E7EB] bg-white text-[#9CA3AF]")}>
+                {isComplete ? <Check className="h-4 w-4" /> : stepNum}
+              </div>
+              <div className="mt-2 text-xs font-medium whitespace-nowrap px-2">{step}</div>
+            </div>
+            {index < steps.length - 1 && (
+              <div className={cn("h-0.5 flex-1 -mt-5 mx-2", isComplete ? "bg-[#7C3AED]" : "bg-[#E5E7EB]")} />
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
-function BulkFileDropCard({ title, helper, accept, onSelect }) {
+function DropzoneCard({ title, helper, accept, multiple, onSelect }) {
   return (
-    <label className="flex min-h-[140px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-[#C4B5FD] bg-[#F5F3FF] px-4 text-center">
-      <FileSpreadsheet className="h-7 w-7 text-[#7C3AED]" />
-      <div className="mt-3 text-sm font-semibold text-[#111827]">{title}</div>
-      <div className="mt-2 max-w-sm text-sm text-[#6B7280]">{helper}</div>
-      <div className="mt-4 rounded-lg border border-[#D1D5DB] bg-white px-3 py-2 text-xs font-medium text-[#374151]">Choose multiple files</div>
-      <input
-        className="hidden"
-        type="file"
-        multiple
-        accept={accept}
-        onChange={(event) => {
-          const files = Array.from(event.target.files || []);
-          if (files.length) onSelect(files);
-          event.target.value = "";
-        }}
-      />
-    </label>
+    <div className="rounded-xl border-2 border-dashed border-[#D1D5DB] bg-[#F9FAFB] p-8 text-center hover:border-[#7C3AED] hover:bg-[#F5F3FF] transition">
+      <div className="flex h-12 w-12 mx-auto items-center justify-center rounded-full bg-[#E5E7EB] text-[#6B7280]">
+        <FileSpreadsheet className="h-6 w-6" />
+      </div>
+      <div className="mt-4 text-base font-medium text-[#111827]">{title}</div>
+      <div className="mt-2 text-sm text-[#6B7280]">{helper}</div>
+      <div className="mt-6 flex justify-center">
+        <label className="cursor-pointer rounded-lg bg-[#7C3AED] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#6D28D9]">
+          Browse {multiple ? "Files" : "File"}
+          <input
+            type="file"
+            className="hidden"
+            accept={accept}
+            multiple={multiple}
+            onChange={(event) => {
+              if (event.target.files.length) {
+                multiple ? onSelect(Array.from(event.target.files)) : onSelect(event.target.files[0]);
+              }
+              event.target.value = "";
+            }}
+          />
+        </label>
+      </div>
+    </div>
   );
+}
+
+function FileDropCard({ title, helper, accept, onSelect }) {
+  return <DropzoneCard title={title} helper={helper} accept={accept} onSelect={onSelect} />;
+}
+
+function BulkFileDropCard({ title, helper, accept, onSelect }) {
+  return <DropzoneCard title={title} helper={helper} accept={accept} multiple onSelect={onSelect} />;
 }
 
 function TallyStatusBadge({ onConnectClick, onStatus }) {
@@ -413,34 +439,50 @@ function TallyStatusBadge({ onConnectClick, onStatus }) {
     };
   }, []);
 
-  const dot = status.tallyConnected ? "bg-[#16A34A]" : status.connectorConnected ? "bg-[#D97706]" : "bg-[#DC2626]";
+  const dot = status.tallyConnected ? "bg-[#16A34A]" : status.connectorConnected ? "bg-[#D97706]" : "bg-[#9CA3AF]";
   const label = status.tallyConnected
-    ? `TallyPrime: Connected — ${status.tallyCompany || "Company"}`
+    ? `● Connected`
     : status.connectorConnected
-      ? "Connector active — open TallyPrime"
-      : "Tally Connector: Disconnected";
+      ? "● Connected (Wait for Tally)"
+      : "○ Not connected";
 
   return (
-    <div className="inline-flex items-center gap-3 rounded-full border border-[#E5E7EB] bg-white px-3 py-2 text-sm text-[#111827]">
-      <span className={cn("h-2 w-2 rounded-full", dot)} />
+    <button 
+      type="button" 
+      onClick={!status.connectorConnected ? onConnectClick : undefined} 
+      className={cn("inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition", status.tallyConnected ? "border-[#BBF7D0] bg-[#F0FDF4] text-[#166534]" : status.connectorConnected ? "border-[#FEF3C7] bg-[#FFFBEB] text-[#B45309]" : "border-[#E5E7EB] bg-[#F9FAFB] text-[#4B5563] hover:bg-[#F3F4F6]")}
+    >
       <span>{label}</span>
-      {!status.connectorConnected ? (
-        <button type="button" onClick={onConnectClick} className="font-medium text-[#7C3AED]">
-          Connect
-        </button>
-      ) : null}
-    </div>
+      {!status.connectorConnected && <span className="ml-1 text-[#7C3AED]">Connect</span>}
+    </button>
   );
 }
 
 function PairingModal({ open, code, onClose, connected }) {
+  const [timeLeft, setTimeLeft] = useState(300);
+  const [copied, setCopied] = useState(false);
+
   useEffect(() => {
     if (connected && open) {
       onClose();
     }
   }, [connected, open, onClose]);
 
+  useEffect(() => {
+    if (open && code) {
+      navigator.clipboard.writeText(code).then(() => setCopied(true)).catch(() => {});
+      setTimeLeft(300);
+      const timer = setInterval(() => {
+        setTimeLeft(t => (t > 0 ? t - 1 : 0));
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [open, code]);
+
   if (!open) return null;
+
+  const minutes = Math.floor(timeLeft / 60);
+  const seconds = timeLeft % 60;
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#111827]/40 p-4">
@@ -449,13 +491,20 @@ function PairingModal({ open, code, onClose, connected }) {
         <p className="mt-3 text-sm text-[#6B7280]">
           Open the Tally AI Connector app on your Windows PC and enter this code.
         </p>
-        <div className="mt-6 rounded-xl border border-[#E9D5FF] bg-[#F5F3FF] px-6 py-8 text-center">
+        <div className="mt-6 rounded-xl border border-[#E9D5FF] bg-[#F5F3FF] px-6 py-8 text-center relative">
           <div className="text-xs font-medium uppercase tracking-[0.18em] text-[#7C3AED]">Pairing code</div>
-          <div className="mt-2 text-5xl font-semibold tracking-[0.28em] text-[#111827]">{code || "------"}</div>
+          <div className="mt-2 text-5xl font-semibold tracking-[0.28em] text-[#111827] select-all">{code || "------"}</div>
+          {copied && <div className="mt-3 text-sm font-semibold text-[#16A34A]">✓ Copied to clipboard</div>}
+          <div className="absolute bottom-3 right-4 text-xs font-medium text-[#6B7280]">
+            Valid for {minutes}:{seconds.toString().padStart(2, '0')}
+          </div>
         </div>
-        <div className="mt-6 flex justify-end">
+        <div className="mt-6 flex justify-end gap-3">
           <Button variant="ghost" onClick={onClose}>
             Close
+          </Button>
+          <Button variant="primary" onClick={() => { navigator.clipboard.writeText(code); setCopied(true); }}>
+            Copy Code
           </Button>
         </div>
       </div>
@@ -1221,13 +1270,15 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([fetchLedgers(), fetchClients(), fetchTallyStatus(), fetchDocumentRequests()])
-      .then(([ledgerPayload, clientPayload, tallyPayload, requestPayload]) => {
+    Promise.all([fetchLedgers(), fetchClients(), fetchTallyStatus(), fetchDocumentRequests(), fetchActivity(), fetchSyncHistory()])
+      .then(([ledgerPayload, clientPayload, tallyPayload, requestPayload, activityPayload, syncPayload]) => {
         if (!active) return;
         setLedgerHeads(ledgerPayload.ledgerHeads || []);
         const nextClients = clientPayload.clients || [];
         setClients(nextClients);
         setDocumentRequests(requestPayload.requests || []);
+        setActivity(activityPayload || []);
+        setSyncHistory(syncPayload || []);
         setTallyStatus(tallyPayload);
         setSettingsForm((current) => ({
           ...current,
@@ -1793,7 +1844,14 @@ export default function App() {
           needsReview: false,
         })),
       };
-      const result = await pushBankStatementToTally(payload, settingsForm);
+      
+      const configPayload = {
+        ...settingsForm,
+        companyName: bankProcessingConfig.companyName || settingsForm.companyName,
+        clientId: bankProcessingConfig.clientId
+      };
+      
+      const result = await pushBankStatementToTally(payload, configPayload);
       let processed = 0;
       rowsToPush.forEach((row, index) => {
         window.setTimeout(() => {
@@ -1811,7 +1869,12 @@ export default function App() {
   async function handleInvoicePush() {
     addToast("Pushing 1 entry to Tally...", "info", 3000);
     await withBusy("invoice-push", async () => {
-      const result = await pushInvoiceToTally(invoice, settingsForm);
+      const configPayload = {
+        ...settingsForm,
+        companyName: activeClient?.tallyCompanyName || activeClient?.name || settingsForm.companyName,
+        clientId: activeClient?.id
+      };
+      const result = await pushInvoiceToTally(invoice, configPayload);
       setInvoiceRows((current) => current.map((row) => ({ ...row, status: result.success === false ? "failed" : "resolved" })));
       addToast(`1 entry pushed successfully. ${result.success === false ? 1 : 0} failed.`, result.success === false ? "error" : "success", 4000);
       addSyncHistory("Invoice", 1, result.success === false ? "Failed" : "Resolved");
@@ -1844,7 +1907,12 @@ export default function App() {
 
       const xmlBlob = await downloadRecommendationXml(filteredPayload);
       const xml = await xmlBlob.text();
-      const result = await pushXmlToTally(xml);
+      const configPayload = {
+        ...settingsForm,
+        companyName: activeClient?.tallyCompanyName || activeClient?.name || settingsForm.companyName,
+        clientId: activeClient?.id
+      };
+      const result = await pushXmlToTally(xml, configPayload);
       rowsToPush.forEach((row, index) => {
         window.setTimeout(() => {
           setRecommendationRows((current) =>
@@ -1911,6 +1979,12 @@ export default function App() {
     );
   }
 
+  if (!authUser.onboardingComplete) {
+    return (
+      <OnboardingWizard user={authUser} onComplete={() => setAuthUser(current => ({ ...current, onboardingComplete: true }))} />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-white text-[#111827]">
       <div className="flex min-h-screen">
@@ -1923,10 +1997,15 @@ export default function App() {
         >
           <div className="flex h-16 items-center justify-between px-4">
             <div className={cn("flex items-center gap-3", sidebarCollapsed && "justify-center")}>
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10">
-                <Building2 className="h-5 w-5" />
+              <div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-[linear-gradient(135deg,#7C3AED_0%,#4F46E5_100%)]">
+                <Landmark className="h-4 w-4 text-white" />
               </div>
-              {!sidebarCollapsed ? <div className="text-sm font-semibold">Tally AI</div> : null}
+              {!sidebarCollapsed ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-base font-bold tracking-tight">Tally AI</span>
+                  <Sparkles className="h-3 w-3 text-[#A78BFA]" />
+                </div>
+              ) : null}
             </div>
             <button
               type="button"
@@ -1991,6 +2070,10 @@ export default function App() {
               <div className="text-[18px] font-semibold text-[#111827]">{pageTitle}</div>
             </div>
             <div className="flex items-center gap-3">
+              <div className="hidden items-center gap-2 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-3 py-1.5 md:flex">
+                <Building2 className="h-4 w-4 text-[#6B7280]" />
+                <div className="text-sm font-medium text-[#374151]">{tallyStatus.tallyCompany || activeClient?.name || "No Company Selected"}</div>
+              </div>
               <TallyStatusBadge onConnectClick={handlePairing} onStatus={(payload) => setTallyStatus(payload)} />
               <AppIconButton className="h-9 w-9">
                 <Bell className="h-4 w-4" />
@@ -2004,6 +2087,13 @@ export default function App() {
               </div>
             </div>
           </header>
+
+          {!tallyStatus.connectorConnected && (
+            <div className="flex items-center justify-between bg-[#FFFBEB] px-4 py-3 text-sm text-[#B45309] border-b border-[#FEF3C7]">
+              <div><strong>Tally is not connected.</strong> Some features are unavailable.</div>
+              <button type="button" onClick={handlePairing} className="font-semibold hover:underline">Set up connection &rarr;</button>
+            </div>
+          )}
 
           <main className="px-4 py-5 md:px-6">
             {bootError ? <div className="mb-4 rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-4 py-3 text-sm text-[#B91C1C]">{bootError}</div> : null}
@@ -2030,20 +2120,30 @@ export default function App() {
                 <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
                   <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
                     <div className="border-b border-[#E5E7EB] px-5 py-4 text-lg font-semibold">Recent Activity</div>
-                    <div className="divide-y divide-[#F3F4F6]">
-                      {activity.map((item) => (
-                        <div key={item.id} className="flex items-center gap-4 px-5 py-4">
-                          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#F5F3FF] text-[#7C3AED]">
-                            <Clock3 className="h-4 w-4" />
+                    {activity.length > 0 ? (
+                      <div className="divide-y divide-[#F3F4F6]">
+                        {activity.map((item) => (
+                          <div key={item.id} className="flex items-center gap-4 px-5 py-4">
+                            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#F5F3FF] text-[#7C3AED]">
+                              <Clock3 className="h-4 w-4" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm text-[#111827]">{item.text}</div>
+                              <div className="mt-1 text-xs text-[#6B7280]">{item.time}</div>
+                            </div>
+                            <Badge status={item.status === "Resolved" ? "resolved" : item.status === "Failed" ? "failed" : "pending"} confidence="high" />
                           </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm text-[#111827]">{item.text}</div>
-                            <div className="mt-1 text-xs text-[#6B7280]">{item.time}</div>
-                          </div>
-                          <Badge status={item.status === "Resolved" ? "resolved" : item.status === "Failed" ? "failed" : "pending"} confidence="high" />
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="p-5">
+                        <EmptyState 
+                          icon={Clock3} 
+                          title="No activity yet" 
+                          description="Upload a bank statement or invoice to get started." 
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
@@ -2077,92 +2177,39 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-                  <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-                    <div className="text-lg font-semibold text-[#111827]">Client Document Inbox</div>
-                    <div className="mt-1 text-sm text-[#6B7280]">Collect statements, registers, and follow-up requests from clients in one place.</div>
-                    <div className="mt-4 space-y-3">
-                      {documentRequests.slice(0, 5).map((request) => (
-                        <div key={request.id} className="rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] p-4">
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <div className="text-sm font-semibold text-[#111827]">{request.title}</div>
-                              <div className="mt-1 text-xs text-[#6B7280]">{request.clientName} • {request.channel} • due {request.dueDate || "open"}</div>
-                            </div>
-                            <Badge status={request.status === "Received" ? "resolved" : request.status === "In Review" ? "pending" : "failed"} confidence="medium" />
-                          </div>
-                          <div className="mt-2 text-sm text-[#6B7280]">{request.notes || "No notes added yet."}</div>
-                          {request.status !== "Received" ? (
-                            <div className="mt-3">
-                              <Button variant="ghost" className="px-3 py-1.5 text-xs" onClick={() => handleCompleteDocument(request.id)}>
-                                Mark Received
-                              </Button>
-                            </div>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="grid gap-6 md:grid-cols-2">
-                    <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-                      <div className="text-lg font-semibold text-[#111827]">Add Client</div>
-                      <div className="mt-4 space-y-3">
-                        <Field label="Client Name">
-                          <input value={clientForm.name} onChange={(event) => setClientForm((current) => ({ ...current, name: event.target.value }))} className="settings-input" />
-                        </Field>
-                        <Field label="Primary Bank">
-                          <select value={clientForm.bankName} onChange={(event) => setClientForm((current) => ({ ...current, bankName: event.target.value }))} className="settings-input">
-                            {bankOptions.map((option) => (
-                              <option key={option} value={option}>{option}</option>
-                            ))}
-                          </select>
-                        </Field>
-                        <Field label="Tally Company Name">
-                          <input value={clientForm.tallyCompanyName} onChange={(event) => setClientForm((current) => ({ ...current, tallyCompanyName: event.target.value }))} className="settings-input" />
-                        </Field>
-                        <Button variant="primary" onClick={handleCreateClient}>Create Client</Button>
-                      </div>
-                    </div>
-
-                    <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-                      <div className="text-lg font-semibold text-[#111827]">Request Client Documents</div>
-                      <div className="mt-4 space-y-3">
-                        <Field label="Client">
-                          <select value={documentForm.clientId} onChange={(event) => setDocumentForm((current) => ({ ...current, clientId: event.target.value }))} className="settings-input">
-                            {clients.map((client) => (
-                              <option key={client.id} value={client.id}>{client.name}</option>
-                            ))}
-                          </select>
-                        </Field>
-                        <Field label="Document Request">
-                          <input value={documentForm.title} onChange={(event) => setDocumentForm((current) => ({ ...current, title: event.target.value }))} className="settings-input" />
-                        </Field>
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <Field label="Channel">
-                            <select value={documentForm.channel} onChange={(event) => setDocumentForm((current) => ({ ...current, channel: event.target.value }))} className="settings-input">
-                              <option>WhatsApp</option>
-                              <option>Email</option>
-                              <option>Phone Call</option>
-                            </select>
-                          </Field>
-                          <Field label="Due Date">
-                            <input type="date" value={documentForm.dueDate} onChange={(event) => setDocumentForm((current) => ({ ...current, dueDate: event.target.value }))} className="settings-input" />
-                          </Field>
-                        </div>
-                        <Field label="Notes">
-                          <textarea value={documentForm.notes} onChange={(event) => setDocumentForm((current) => ({ ...current, notes: event.target.value }))} className="min-h-[92px] w-full rounded-lg border border-[#D1D5DB] px-3 py-2 text-sm outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]" />
-                        </Field>
-                        <Button variant="primary" onClick={handleCreateDocumentRequest}>Log Request</Button>
-                      </div>
-                    </div>
+                <div className="rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                  <div className="text-lg font-semibold text-[#111827]">Quick Actions</div>
+                  <div className="mt-4 grid gap-4 grid-cols-2 lg:grid-cols-4">
+                    <Button variant="primary" onClick={() => setActivePage("bank")} className="w-full justify-center">Upload Bank Statement</Button>
+                    <Button variant="ghost" onClick={() => setActivePage("invoice")} className="w-full justify-center">Upload Invoice</Button>
+                    <Button variant="outlinePurple" onClick={() => setActivePage("gst")} className="w-full justify-center">GST Reconcile</Button>
+                    <Button variant="ghost" onClick={() => setActivePage("history")} className="w-full justify-center">View History</Button>
                   </div>
                 </div>
               </div>
             ) : null}
 
+            {activePage === "clients" ? (
+              <ClientsPage
+                clients={clients}
+                documentRequests={documentRequests}
+                bankOptions={bankOptions}
+                clientForm={clientForm}
+                setClientForm={setClientForm}
+                onCreateClient={handleCreateClient}
+                documentForm={documentForm}
+                setDocumentForm={setDocumentForm}
+                onCreateDocumentRequest={handleCreateDocumentRequest}
+                onCompleteDocument={handleCompleteDocument}
+              />
+            ) : null}
+
             {activePage === "bank" ? (
               <div className="space-y-6">
+                <StepIndicator 
+                  currentStep={bankStatement.originalFileName ? bankRows.filter(r => r.status === "pending").length === 0 ? 4 : 3 : 1} 
+                  steps={["Upload", "Configure", "Review", "Push"]} 
+                />
                 <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
                   <div className="space-y-4">
                     <BulkFileDropCard
@@ -2323,7 +2370,7 @@ export default function App() {
                     <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
                       <div className="flex items-center justify-between">
                         <div>
-                          <div className="text-lg font-semibold text-[#111827]">Speedy Grouped Recommendations</div>
+                          <div className="text-lg font-semibold text-[#111827]">Smart Categorization</div>
                           <div className="mt-1 text-sm text-[#6B7280]">
                             Similar entries are clubbed together so you can assign one ledger and voucher type in bulk.
                           </div>
@@ -2384,9 +2431,17 @@ export default function App() {
                       onSelect={handleInvoiceUpload}
                     />
                     <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-                      <div className="text-[13px] text-[#6B7280]">Invoice</div>
-                      <div className="mt-2 text-base font-semibold text-[#111827]">{invoice.invoiceNumber || "Awaiting upload"}</div>
-                      <div className="mt-1 text-sm text-[#6B7280]">{invoice.vendorName || "Vendor name will appear here"}</div>
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="text-[13px] font-medium text-[#6B7280] uppercase tracking-wider">Invoice Details</div>
+                          <div className="mt-2 text-lg font-semibold text-[#111827]">{invoice.invoiceNumber || "Awaiting upload"}</div>
+                          <div className="mt-1 text-sm text-[#6B7280]">{invoice.vendorName || "Vendor will appear here"}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xl font-bold text-[#111827]">{invoice.totalAmount ? formatCurrency(invoice.totalAmount) : "₹0.00"}</div>
+                          <div className="mt-1 text-xs font-medium text-[#6B7280]">{invoice.invoiceDate || "—"}</div>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -2492,6 +2547,13 @@ export default function App() {
 
 function GstPage({ report, onReconcile }) {
   const [files, setFiles] = useState({ gstr2b: null, purchaseRegister: null });
+  const [activeTab, setActiveTab] = useState("all");
+
+  const filteredRows = report.rows.filter(row => {
+    if (activeTab === "matched") return row.status === "matched";
+    if (activeTab === "mismatched") return row.status !== "matched";
+    return true;
+  });
 
   return (
     <div className="grid gap-6 xl:grid-cols-[360px_1fr]">
@@ -2501,14 +2563,14 @@ function GstPage({ report, onReconcile }) {
         <Button variant="primary" className="w-full justify-center" disabled={!files.gstr2b || !files.purchaseRegister} onClick={() => onReconcile(files.gstr2b, files.purchaseRegister)}>
           Reconcile
         </Button>
-        <div className="rounded-xl border border-[#E5E7EB] bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-          <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7C3AED]">Supported Headers</div>
+        <details className="rounded-xl border border-[#E5E7EB] bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)] cursor-pointer group">
+          <summary className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7C3AED] select-none outline-none">Supported Headers</summary>
           <div className="mt-3 space-y-2 text-[11px] text-[#6B7280]">
             <div><strong>Invoice:</strong> Vch No, Voucher No, Invoice No, Bill No</div>
             <div><strong>GSTIN:</strong> GSTIN of supplier, Registration No, Registration Number</div>
             <div><strong>Amount:</strong> Taxable Value, CGST, SGST, IGST, Total Amount</div>
           </div>
-        </div>
+        </details>
       </div>
       <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
         {report.summary.total > 0 ? (
@@ -2520,8 +2582,19 @@ function GstPage({ report, onReconcile }) {
               <StatMini label="Duplicate" value={formatNumber(report.summary.duplicateInvoices || 0)} tone="text-[#DC2626]" />
               <StatMini label="Missing GSTIN" value={formatNumber(report.summary.missingGstin || 0)} tone="text-[#D97706]" />
             </div>
-            <div className="border-b border-[#E5E7EB] px-5 py-4 text-sm text-[#4B5563]">
-              Exact match rate: <span className="font-semibold text-[#111827]">{report.summary.exactMatchRate || 0}%</span>
+            <div className="flex items-center gap-4 border-b border-[#E5E7EB] px-5">
+              {['all', 'matched', 'mismatched'].map(tab => (
+                <button
+                  key={tab}
+                  className={cn("border-b-2 px-1 py-4 text-sm font-medium transition-colors", activeTab === tab ? "border-[#7C3AED] text-[#7C3AED]" : "border-transparent text-[#6B7280] hover:border-[#D1D5DB] hover:text-[#374151]")}
+                  onClick={() => setActiveTab(tab)}
+                >
+                  {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                </button>
+              ))}
+              <div className="ml-auto py-4 text-sm text-[#4B5563]">
+                Exact match rate: <span className="font-semibold text-[#111827]">{report.summary.exactMatchRate || 0}%</span>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
@@ -2536,7 +2609,7 @@ function GstPage({ report, onReconcile }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {report.rows.map((row) => (
+                  {filteredRows.map((row) => (
                     <tr key={row.id} className="border-b border-[#F3F4F6] bg-white hover:bg-[#F9FAFB]">
                       <td className="px-4 py-3">
                         <Badge status={row.status === "matched" ? "resolved" : row.status === "partial" ? "pending" : "failed"} confidence="medium" />
@@ -2574,44 +2647,175 @@ function HistoryPage({ activity, syncHistory }) {
       <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
         <div className="border-b border-[#E5E7EB] px-5 py-4 text-lg font-semibold">Recent Activity</div>
         <div className="divide-y divide-[#F3F4F6]">
-          {activity.map((item) => (
-            <div key={item.id} className="flex items-center justify-between gap-4 px-5 py-4">
+          {activity.length > 0 ? activity.map((item) => (
+            <div key={item.id} className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-[#F9FAFB] transition-colors">
               <div>
-                <div className="text-sm text-[#111827]">{item.text}</div>
+                <div className="text-sm font-medium text-[#111827]">{item.text}</div>
                 <div className="mt-1 text-xs text-[#6B7280]">{item.time}</div>
               </div>
               <Badge status={item.status === "Resolved" ? "resolved" : item.status === "Failed" ? "failed" : "pending"} confidence="high" />
             </div>
-          ))}
+          )) : (
+            <div className="p-5 flex flex-col items-center text-center">
+              <div className="rounded-full bg-[#F3F4F6] p-3 mb-2"><History className="h-5 w-5 text-[#9CA3AF]" /></div>
+              <div className="text-sm font-medium text-[#111827]">No activity logs</div>
+              <div className="text-xs text-[#6B7280]">Any recent platform actions will appear here.</div>
+            </div>
+          )}
         </div>
       </div>
       <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
         <div className="border-b border-[#E5E7EB] px-5 py-4 text-lg font-semibold">Tally Sync History</div>
         <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-[#F9FAFB] text-left text-xs uppercase tracking-[0.08em] text-[#6B7280]">
-              <tr>
-                <th className="px-4 py-3 font-medium">Time</th>
-                <th className="px-4 py-3 font-medium">Type</th>
-                <th className="px-4 py-3 font-medium">Entries</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Company</th>
-              </tr>
-            </thead>
-            <tbody>
-              {syncHistory.map((item) => (
-                <tr key={item.id} className="border-b border-[#F3F4F6]">
-                  <td className="px-4 py-3">{item.time}</td>
-                  <td className="px-4 py-3">{item.type}</td>
-                  <td className="px-4 py-3">{item.entries}</td>
-                  <td className="px-4 py-3">
-                    <Badge status={item.status === "Resolved" ? "resolved" : item.status === "Failed" ? "failed" : "pending"} confidence="high" />
-                  </td>
-                  <td className="px-4 py-3">{item.company}</td>
+          {syncHistory.length > 0 ? (
+            <table className="min-w-full text-sm">
+              <thead className="bg-[#F9FAFB] text-left text-xs uppercase tracking-[0.08em] text-[#6B7280]">
+                <tr>
+                  <th className="px-4 py-3 font-medium">Time</th>
+                  <th className="px-4 py-3 font-medium">Type</th>
+                  <th className="px-4 py-3 font-medium">Entries</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Company</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {syncHistory.map((item) => (
+                  <tr key={item.id} className="border-b border-[#F3F4F6] hover:bg-[#F9FAFB]">
+                    <td className="px-4 py-3 whitespace-nowrap">{item.time}</td>
+                    <td className="px-4 py-3 font-medium text-[#111827] whitespace-nowrap">{item.type}</td>
+                    <td className="px-4 py-3 text-[#6B7280] font-mono">{item.entries}</td>
+                    <td className="px-4 py-3">
+                      <Badge status={item.status === "Resolved" ? "resolved" : item.status === "Failed" ? "failed" : "pending"} confidence="high" />
+                    </td>
+                    <td className="px-4 py-3 text-[#6B7280] truncate max-w-[120px]">{item.company}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="p-8 flex flex-col items-center text-center">
+              <div className="rounded-full bg-[#F3F4F6] p-4 mb-3"><Landmark className="h-6 w-6 text-[#9CA3AF]" /></div>
+              <div className="text-[15px] font-semibold text-[#111827]">No Tally Syncs Yet</div>
+              <div className="text-sm mt-1 text-[#6B7280]">Records synced to Tally will be tracked here.</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClientsPage({ clients, documentRequests, bankOptions, clientForm, setClientForm, onCreateClient, documentForm, setDocumentForm, onCreateDocumentRequest, onCompleteDocument }) {
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-6 md:grid-cols-[1.2fr_0.8fr]">
+        <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+          <div className="border-b border-[#E5E7EB] px-5 py-4 text-lg font-semibold text-[#111827]">Clients</div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-[#F9FAFB] text-left text-xs uppercase tracking-[0.08em] text-[#6B7280]">
+                <tr>
+                  <th className="px-5 py-3 font-medium">Name</th>
+                  <th className="px-5 py-3 font-medium">Tally Company</th>
+                  <th className="px-5 py-3 font-medium">Bank</th>
+                </tr>
+              </thead>
+              <tbody>
+                {clients.map((client) => (
+                  <tr key={client.id} className="border-b border-[#F3F4F6] hover:bg-[#F9FAFB] transition-colors">
+                    <td className="px-5 py-4 font-medium text-[#111827]">{client.name}</td>
+                    <td className="px-5 py-4">{client.tallyCompanyName || "—"}</td>
+                    <td className="px-5 py-4 text-[#6B7280]">{client.bankName || "—"}</td>
+                  </tr>
+                ))}
+                {clients.length === 0 && (
+                  <tr>
+                    <td colSpan="3" className="px-5 py-8 text-center text-sm text-[#6B7280]">No clients added yet. Add your first client below.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)] flex flex-col max-h-[600px]">
+          <div className="border-b border-[#E5E7EB] px-5 py-4 shrink-0">
+            <div className="text-lg font-semibold text-[#111827]">Document Inbox</div>
+            <div className="mt-1 text-xs text-[#6B7280]">Pending and received files from clients.</div>
+          </div>
+          <div className="overflow-y-auto p-5 space-y-3">
+            {documentRequests.map((request) => (
+              <div key={request.id} className="rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-[#111827]">{request.title}</div>
+                    <div className="mt-1 text-xs text-[#6B7280]">{request.clientName} • {request.channel} • Due {request.dueDate || "open"}</div>
+                  </div>
+                  <Badge status={request.status === "Received" ? "resolved" : request.status === "In Review" ? "pending" : "failed"} confidence="medium" />
+                </div>
+                {request.status !== "Received" && (
+                  <div className="mt-3">
+                    <Button variant="ghost" className="px-3 py-1.5 text-xs w-full justify-center" onClick={() => onCompleteDocument(request.id)}>
+                      Mark Received
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+            {documentRequests.length === 0 && (
+              <div className="py-8 text-center text-sm text-[#6B7280]">No document requests.</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-6 md:grid-cols-2">
+        <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+          <div className="text-lg font-semibold text-[#111827]">Add Client</div>
+          <div className="mt-5 space-y-4">
+            <Field label="Client Name">
+              <input value={clientForm.name} onChange={(e) => setClientForm(c => ({ ...c, name: e.target.value }))} className="settings-input" />
+            </Field>
+            <Field label="Primary Bank">
+              <select value={clientForm.bankName} onChange={(e) => setClientForm(c => ({ ...c, bankName: e.target.value }))} className="settings-input">
+                {bankOptions.map(option => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </Field>
+            <Field label="Tally Company Name">
+              <input value={clientForm.tallyCompanyName} onChange={(e) => setClientForm(c => ({ ...c, tallyCompanyName: e.target.value }))} className="settings-input" />
+            </Field>
+            <Button variant="primary" className="w-full justify-center" onClick={onCreateClient}>
+              Create Client
+            </Button>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+          <div className="text-lg font-semibold text-[#111827]">Request Documents</div>
+          <div className="mt-5 space-y-4">
+            <Field label="Client">
+              <select value={documentForm.clientId} onChange={(e) => setDocumentForm(c => ({ ...c, clientId: e.target.value }))} className="settings-input">
+                <option value="">Select a Client</option>
+                {clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Document Request">
+              <input value={documentForm.title} onChange={(e) => setDocumentForm(c => ({ ...c, title: e.target.value }))} className="settings-input" />
+            </Field>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field label="Channel">
+                <select value={documentForm.channel} onChange={(e) => setDocumentForm(c => ({ ...c, channel: e.target.value }))} className="settings-input">
+                  <option>WhatsApp</option>
+                  <option>Email</option>
+                  <option>Phone Call</option>
+                </select>
+              </Field>
+              <Field label="Due Date">
+                <input type="date" value={documentForm.dueDate} onChange={(e) => setDocumentForm(c => ({ ...c, dueDate: e.target.value }))} className="settings-input" />
+              </Field>
+            </div>
+            <Button variant="primary" className="w-full justify-center" onClick={onCreateDocumentRequest}>Log Request</Button>
+          </div>
         </div>
       </div>
     </div>
