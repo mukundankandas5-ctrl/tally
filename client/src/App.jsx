@@ -420,20 +420,20 @@ function AppIconButton({ children, className = "", ...props }) {
 function Button({ variant = "primary", className = "", children, ...props }) {
   const variants = {
     primary:
-      "bg-[linear-gradient(135deg,rgba(124,58,237,0.96)_0%,rgba(79,70,229,0.94)_100%)] text-white border border-white/30 shadow-[0_16px_40px_rgba(124,58,237,0.28)]",
+      "bg-[#7C3AED] text-white shadow-sm hover:bg-[#6D28D9]",
     ghost:
-      "bg-white/50 text-[#374151] border border-white/60 backdrop-blur-xl shadow-[0_10px_30px_rgba(15,23,42,0.08)] hover:bg-white/70",
+      "bg-white text-[#374151] border border-[#E5E7EB] shadow-sm hover:bg-[#F9FAFB]",
     outlinePurple:
-      "bg-white/45 text-[#7C3AED] border border-[#C4B5FD]/70 backdrop-blur-xl shadow-[0_10px_30px_rgba(124,58,237,0.08)] hover:bg-white/75",
+      "bg-white text-[#7C3AED] border border-[#C4B5FD] shadow-sm hover:bg-[#F5F3FF]",
     danger:
-      "bg-white/50 text-[#DC2626] border border-[#FCA5A5]/70 backdrop-blur-xl shadow-[0_10px_30px_rgba(220,38,38,0.08)] hover:bg-white/75",
+      "bg-white text-[#DC2626] border border-[#FCA5A5] shadow-sm hover:bg-[#FEF2F2]",
   };
 
   return (
     <button
       type="button"
       className={cn(
-        "inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 backdrop-blur-xl",
+        "inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50",
         variants[variant],
         className
       )}
@@ -796,7 +796,7 @@ function CategoryCell({ row, onCategorySave }) {
             setSelected(row.category || "Miscellaneous Expense");
             setEditing(false);
           }}
-          className="rounded-2xl border border-white/70 bg-white/55 px-3 py-2 text-xs text-[#4B5563] backdrop-blur-xl transition hover:bg-white/80"
+          className="rounded-lg border border-slate-200 bg-white shadow-sm transition hover:bg-slate-50"
         >
           Cancel
         </button>
@@ -1168,7 +1168,7 @@ function EntryTable({
   );
 
   return (
-    <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel">
+    <div className="glass-panel rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-white/50 px-5 py-4">
         <div className="text-lg font-semibold text-[#111827]">{title}</div>
         <div className="mt-1 text-sm text-[#6B7280]">{subtitle}</div>
@@ -1200,7 +1200,7 @@ function EntryTable({
           )}
         </div>
 
-        <div className="mt-4 flex flex-col gap-3 rounded-3xl border border-white/70 bg-white/45 p-4 backdrop-blur-xl">
+        <div className="mt-4 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white shadow-sm p-4">
           <div className="text-sm font-medium text-[#111827]">Adjustment instructions</div>
           <div className="flex flex-col gap-3 lg:flex-row">
             <textarea
@@ -1285,7 +1285,7 @@ function EntryTable({
           </div>
         ) : null}
 
-        <div className="mt-4 overflow-hidden rounded-[28px] border border-white/70 bg-white/35 backdrop-blur-2xl shadow-[0_18px_60px_rgba(15,23,42,0.08)]">
+        <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-md">
           <div className="overflow-x-auto">
             <div className={cn(isBankRowType ? "min-w-[1120px]" : "min-w-[1070px]")}>
               {renderHeader}
@@ -1328,7 +1328,7 @@ function EntryTable({
           </div>
         </div>
 
-        <div className="sticky bottom-0 mt-0 flex flex-col gap-3 border-t border-white/50 bg-white/55 px-5 py-4 backdrop-blur-2xl lg:flex-row lg:items-center lg:justify-between">
+        <div className="sticky bottom-0 mt-0 flex flex-col gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-4 text-sm text-[#4B5563]">
             <span>Total rows: {visibleRows.length}</span>
             <span>Selected: {visibleSelectedCount}</span>
@@ -2355,16 +2355,11 @@ export default function App() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden text-[#111827]">
-      <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
-        <div className="absolute -left-24 top-8 h-80 w-80 rounded-full bg-[#A78BFA]/20 blur-3xl" />
-        <div className="absolute right-[-4rem] top-28 h-96 w-96 rounded-full bg-[#67E8F9]/18 blur-3xl" />
-        <div className="absolute bottom-[-5rem] left-1/3 h-96 w-96 rounded-full bg-[#F9A8D4]/14 blur-3xl" />
-      </div>
+    <>
       <div className="flex min-h-screen">
         <aside
           className={cn(
-            "fixed inset-y-0 left-0 z-30 flex flex-col border-r border-white/20 bg-[#1E1B4B]/86 text-white shadow-[0_24px_80px_rgba(15,23,42,0.28)] backdrop-blur-2xl transition-all duration-200 md:translate-x-0",
+            "fixed inset-y-0 left-0 z-30 flex flex-col border-r border-[#E5E7EB] bg-[#111827] text-white transition-all duration-200 md:translate-x-0",
             mobileSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
           )}
           style={{ width: sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH }}
@@ -2436,7 +2431,7 @@ export default function App() {
         {mobileSidebarOpen ? <button type="button" className="fixed inset-0 z-20 bg-black/20 md:hidden" onClick={() => setMobileSidebarOpen(false)} /> : null}
 
         <div className="flex-1 md:ml-[220px]" style={{ marginLeft: sidebarCollapsed && window.innerWidth >= 768 ? SIDEBAR_COLLAPSED_WIDTH : undefined }}>
-          <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-white/60 bg-white/55 px-4 backdrop-blur-2xl md:px-6">
+          <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4 md:px-6">
             <div className="flex items-center gap-3">
               <AppIconButton className="h-9 w-9 md:hidden" onClick={() => setMobileSidebarOpen(true)}>
                 <Menu className="h-4 w-4" />
@@ -2479,7 +2474,7 @@ export default function App() {
                   {dashboardStats.map((card) => {
                     const Icon = card.icon;
                     return (
-                      <div key={card.label} className="glass-panel rounded-3xl border border-white/70 p-5">
+                      <div key={card.label} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#F5F3FF] text-[#7C3AED]">
                           <Icon className="h-5 w-5" />
                         </div>
@@ -2492,7 +2487,7 @@ export default function App() {
                 </div>
 
                 <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-                  <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel">
+                  <div className="glass-panel rounded-xl border border-slate-200 bg-white shadow-sm">
                     <div className="border-b border-white/50 px-5 py-4 text-lg font-semibold">Recent Activity</div>
                     {activity.length > 0 ? (
                       <div className="divide-y divide-[#F3F4F6]">
@@ -2520,7 +2515,7 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel">
+                  <div className="glass-panel rounded-xl border border-slate-200 bg-white shadow-sm">
                     <div className="border-b border-white/50 px-5 py-4 text-lg font-semibold">Tally Sync History</div>
                     <div className="overflow-x-auto">
                       <table className="min-w-full text-sm">
@@ -2925,7 +2920,7 @@ export default function App() {
 
       <PairingModal open={pairingModalOpen} code={pairingCode} connected={tallyStatus.tallyConnected} onClose={() => setPairingModalOpen(false)} />
       <ToastStack toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((toast) => toast.id !== id))} />
-    </div>
+    </>
   );
 }
 
