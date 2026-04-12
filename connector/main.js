@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, Notification } = require("electron");
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, Notification, dialog } = require("electron");
 const Store = require("electron-store");
 const axios = require("axios");
 const WebSocket = require("ws");
@@ -14,12 +14,11 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    if (statusWindow) {
-      if (statusWindow.isMinimized()) statusWindow.restore();
-      statusWindow.focus();
-    } else if (settingsWindow) {
-      if (settingsWindow.isMinimized()) settingsWindow.restore();
-      settingsWindow.focus();
+    const wins = [statusWindow, settingsWindow].filter(Boolean);
+    if (wins.length > 0) {
+      if (wins[0].isMinimized()) wins[0].restore();
+      wins[0].show();
+      wins[0].focus();
     } else {
       openStatusWindow();
     }
@@ -140,159 +139,7 @@ function updateTray() {
   );
 }
 
-function renderWindowHtml(mode) {
-  const isSetup = mode === "setup";
-  return `
-  <!doctype html>
-  <html>
-    <head>
-      <meta charset="UTF-8" />
-      <title>Tally AI Connector</title>
-      <style>
-        body {
-          margin: 0;
-          font-family: Inter, Segoe UI, sans-serif;
-          background: #0f172a;
-          color: #e2e8f0;
-        }
-        .shell {
-          padding: 24px;
-        }
-        .card {
-          border: 1px solid rgba(148, 163, 184, 0.2);
-          border-radius: 24px;
-          background: rgba(15, 23, 42, 0.9);
-          padding: 24px;
-        }
-        .label {
-          display: block;
-          margin-bottom: 8px;
-          font-size: 12px;
-          font-weight: 700;
-          letter-spacing: 0.14em;
-          text-transform: uppercase;
-          color: #93c5fd;
-        }
-        .field {
-          width: 100%;
-          border-radius: 16px;
-          border: 1px solid rgba(148, 163, 184, 0.18);
-          background: #fff;
-          color: #0f172a;
-          padding: 14px 16px;
-          font-size: 14px;
-          box-sizing: border-box;
-        }
-        .button {
-          border: none;
-          border-radius: 16px;
-          padding: 12px 16px;
-          font-size: 14px;
-          font-weight: 700;
-          cursor: pointer;
-        }
-        .primary {
-          background: #2563eb;
-          color: white;
-        }
-        .secondary {
-          background: rgba(255,255,255,0.08);
-          color: white;
-        }
-        .row {
-          display: grid;
-          gap: 16px;
-        }
-        .status {
-          display: grid;
-          gap: 12px;
-          margin-top: 16px;
-          font-size: 14px;
-          color: #cbd5e1;
-        }
-        .pill {
-          display: inline-flex;
-          align-items: center;
-          gap: 10px;
-          padding: 10px 14px;
-          border-radius: 999px;
-          background: rgba(255,255,255,0.08);
-          width: fit-content;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="shell">
-        <div class="card">
-          <div style="font-size:12px;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:#93c5fd;">Tally AI Connector</div>
-          <h1 style="margin:12px 0 8px;font-size:28px;line-height:1.2;">${isSetup ? "Pair this Windows PC" : "Connector Settings"}</h1>
-          <p style="margin:0 0 24px;color:#94a3b8;font-size:14px;line-height:1.6;">
-            ${isSetup ? "Enter the backend URL and the 6-digit pairing code from the website." : "Update connector settings, startup behavior, and pairing details."}
-          </p>
-
-          <form id="settings-form" class="row">
-            <div>
-              <label class="label">Backend URL</label>
-              <input id="backendUrl" class="field" placeholder="https://your-app.onrender.com" />
-            </div>
-            <div>
-              <label class="label">Pairing Code</label>
-              <input id="pairingCode" class="field" placeholder="123456" maxlength="6" />
-            </div>
-            <label style="display:flex;align-items:center;gap:12px;font-size:14px;color:#cbd5e1;">
-              <input id="launchAtStartup" type="checkbox" />
-              Launch connector when Windows starts
-            </label>
-            <div style="display:flex;gap:12px;">
-              <button class="button primary" type="submit">${isSetup ? "Pair Connector" : "Save Settings"}</button>
-              <button class="button secondary" id="closeButton" type="button">Minimize to Tray</button>
-              <button class="button secondary" id="quitButton" type="button" style="color:#fca5a5;border-color:rgba(252,165,165,0.2);">Quit App</button>
-            </div>
-            <div id="message" style="min-height:20px;font-size:13px;color:#fca5a5;"></div>
-          </form>
-          <div style="margin-top:16px;font-size:12px;color:#94a3b8;line-height:1.5;">
-            Tip: Closing this window will keep the connector running in your system tray so Tally can stay synced. Use "Quit App" to fully exit.
-          </div>
-
-          <div class="status">
-            <div class="pill"><span>Device ID:</span><strong id="deviceId"></strong></div>
-            <div>Connector: <strong id="connectorState">Disconnected</strong></div>
-            <div>TallyPrime: <strong id="tallyState">Not detected</strong></div>
-            <div>Company: <strong id="companyState"></strong></div>
-            <div>Last heartbeat: <strong id="heartbeatState"></strong></div>
-          </div>
-        </div>
-      </div>
-
-      <script>
-        (async function() {
-          var state = await window.connectorApi.getState();
-          document.getElementById("backendUrl").value = state.backendUrl || "";
-          document.getElementById("launchAtStartup").checked = !!state.launchAtStartup;
-          document.getElementById("deviceId").textContent = state.deviceId;
-          document.getElementById("connectorState").textContent = state.connectorConnected ? "Connected" : "Disconnected";
-          document.getElementById("tallyState").textContent = state.tallyConnected ? "Connected" : "Not detected";
-          document.getElementById("companyState").textContent = state.tallyCompany || "No active company";
-          document.getElementById("heartbeatState").textContent = state.lastHeartbeatAt ? new Date(state.lastHeartbeatAt).toLocaleString() : "Never";
-
-          document.getElementById("settings-form").addEventListener("submit", async function(event) {
-            event.preventDefault();
-            var response = await window.connectorApi.saveSettings({
-              backendUrl: document.getElementById("backendUrl").value,
-              pairingCode: document.getElementById("pairingCode").value,
-              launchAtStartup: document.getElementById("launchAtStartup").checked,
-            });
-            document.getElementById("message").textContent = response.message;
-          });
-
-          document.getElementById("closeButton").addEventListener("click", function() { window.connectorApi.closeWindow(); });
-          document.getElementById("quitButton").addEventListener("click", function() { if(confirm("Are you sure you want to stop the connector and Tally sync?")) { window.connectorApi.quitApp(); } });
-        })();
-      </script>
-    </body>
-  </html>
-  `;
-}
+// Removed renderWindowHtml - now using index.html
 
 function createWindow(opts) {
   var mode = opts.mode;
@@ -311,7 +158,7 @@ function createWindow(opts) {
     },
   });
 
-  target.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(renderWindowHtml(mode)));
+  target.loadFile(path.join(__dirname, "index.html"));
   target.once("ready-to-show", function() {
     if (!target.isDestroyed()) {
       target.show();
