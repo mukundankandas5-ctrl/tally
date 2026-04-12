@@ -3,7 +3,10 @@ const Store = require("electron-store");
 const axios = require("axios");
 const WebSocket = require("ws");
 const { v4: uuidv4 } = require("uuid");
+const fs = require("fs");
 const path = require("path");
+
+app.disableHardwareAcceleration();
 
 const gotTheLock = app.requestSingleInstanceLock();
 
@@ -51,6 +54,24 @@ let lastConnectorMessage = "Starting connector";
 let hasShownTrayNotice = false;
 let isQuitting = false;
 let socketConnectTimer = null;
+let logFilePath = "";
+
+function appendLog(message) {
+  try {
+    if (!logFilePath && app.getPath) {
+      logFilePath = path.join(app.getPath("userData"), "connector.log");
+    }
+    fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] ${message}\n`, "utf8");
+  } catch (error) {}
+}
+
+process.on("uncaughtException", function (error) {
+  appendLog(`uncaughtException: ${error && error.stack ? error.stack : error}`);
+});
+
+process.on("unhandledRejection", function (reason) {
+  appendLog(`unhandledRejection: ${reason && reason.stack ? reason.stack : reason}`);
+});
 
 function getDeviceId() {
   let deviceId = store.get("deviceId");
@@ -291,7 +312,18 @@ function createWindow(opts) {
   });
 
   target.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(renderWindowHtml(mode)));
-  target.once("ready-to-show", function() { target.show(); });
+  target.once("ready-to-show", function() {
+    if (!target.isDestroyed()) {
+      target.show();
+      target.focus();
+    }
+  });
+  target.webContents.once("did-finish-load", function() {
+    if (!target.isDestroyed() && !target.isVisible()) {
+      target.show();
+      target.focus();
+    }
+  });
   target.on("closed", function() { assignment(null); });
 
   return target;
@@ -631,6 +663,14 @@ async function pairConnector(opts) {
 function createTray() {
   tray = new Tray(renderIcon(currentTrayColor()));
   tray.on("double-click", function() { openStatusWindow(); });
+  tray.on("click", function() {
+    if (settingsWindow) {
+      settingsWindow.show();
+      settingsWindow.focus();
+    } else {
+      openStatusWindow();
+    }
+  });
   updateTray();
 }
 
@@ -644,6 +684,24 @@ if (gotTheLock) {
     } else {
       openStatusWindow();
       connectSocket();
+    }
+  });
+
+  app.on("activate", function () {
+    if (settingsWindow) {
+      settingsWindow.show();
+      settingsWindow.focus();
+      return;
+    }
+    if (statusWindow) {
+      statusWindow.show();
+      statusWindow.focus();
+      return;
+    }
+    if (!store.get("deviceToken") || !getBackendUrl()) {
+      openSettingsWindow("setup");
+    } else {
+      openStatusWindow();
     }
   });
 
