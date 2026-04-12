@@ -38,6 +38,23 @@ const store = new Store({
 const TALLY_PING_XML =
   '<?xml version="1.0" encoding="utf-8"?><ENVELOPE><HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER><BODY><EXPORTDATA><REQUESTDESC><REPORTNAME>List of Companies</REPORTNAME></REQUESTDESC></EXPORTDATA></BODY></ENVELOPE>';
 
+const TALLY_LEDGER_QUERY_XML = `
+<ENVELOPE>
+    <HEADER>
+        <TALLYREQUEST>Export Data</TALLYREQUEST>
+    </HEADER>
+    <BODY>
+        <EXPORTDATA>
+            <REQUESTDESC>
+                <REPORTNAME>List of Ledgers</REPORTNAME>
+                <STATICVARIABLES>
+                    <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+                </STATICVARIABLES>
+            </REQUESTDESC>
+        </EXPORTDATA>
+    </BODY>
+</ENVELOPE>`;
+
 let tray = null;
 let settingsWindow = null;
 let statusWindow = null;
@@ -264,19 +281,53 @@ async function pushXmlToLocalTally(entryId, xml) {
       headers: {
         "Content-Type": "text/xml;charset=utf-8",
       },
-      timeout: 10000,
-      responseType: "text",
+      timeout: 15000,
     });
-
-    var raw = String(response.data || "");
-    var success = !/LINEERROR/i.test(raw) && /<CREATED>/i.test(raw);
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: "push_result", entryId: entryId, success: success, response: raw }));
-    }
+    socket.send(
+      JSON.stringify({
+        type: "push_result",
+        entryId,
+        success: true,
+        response: response.data,
+      })
+    );
   } catch (error) {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: "push_result", entryId: entryId, success: false, response: String(error.message || error) }));
-    }
+    socket.send(
+      JSON.stringify({
+        type: "push_result",
+        entryId,
+        success: false,
+        response: error.message,
+      })
+    );
+  }
+}
+
+async function fetchLedgersFromLocalTally(requestId) {
+  try {
+    var response = await axios.post("http://localhost:9000", TALLY_LEDGER_QUERY_XML, {
+      headers: {
+        "Content-Type": "text/xml;charset=utf-8",
+      },
+      timeout: 30000,
+    });
+    socket.send(
+      JSON.stringify({
+        type: "ledger_result",
+        requestId,
+        success: true,
+        xml: response.data,
+      })
+    );
+  } catch (error) {
+    socket.send(
+      JSON.stringify({
+        type: "ledger_result",
+        requestId,
+        success: false,
+        error: error.message,
+      })
+    );
   }
 }
 
@@ -378,6 +429,8 @@ function connectSocket() {
       }
       if (message.type === "push_entry") {
         await pushXmlToLocalTally(message.entryId, message.xml);
+      } else if (message.type === "get_ledgers") {
+        await fetchLedgersFromLocalTally(message.requestId);
       }
     } catch (error) {
       lastConnectorMessage = "Received invalid message";

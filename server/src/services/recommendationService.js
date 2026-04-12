@@ -4,6 +4,7 @@ const AppError = require("../utils/appError");
 const { ledgerHeads, defaultVoucherLedgers } = require("../constants/ledgerHeads");
 const { requestStructuredJson } = require("./anthropicService");
 const { getLearnedRuleForNarration, getLearningSummary } = require("./learningService");
+const { getAvailableLedgers } = require("./ledgerService");
 const { cleanString, toFixedAmount, toIsoDate, toNumber } = require("../utils/normalizers");
 
 const descriptionKeys = ["description", "narration", "particulars", "remarks", "details", "transaction description"];
@@ -56,24 +57,29 @@ function heuristicMapping(description, debit, credit) {
   };
 }
 
-async function requestAiSuggestions(rows) {
+async function requestAiSuggestions(rows, availableLedgers = []) {
   if (!env.anthropicApiKey || rows.length === 0 || rows.length > 120) {
     return [];
   }
+
+  const ledgerOptions = availableLedgers.length > 0 
+    ? availableLedgers.map(l => l.name).join(", ")
+    : ledgerHeads.map((item) => item.name).join(", ");
 
   try {
     const structured = await requestStructuredJson({
       systemPrompt: [
         "You are an expert Indian accounting assistant generating ledger suggestions for bulk transaction mapping.",
+        availableLedgers.length > 0 ? "IMPORTANT: Use only the ledger names provided in the list below as they are from the user's real Tally company." : "",
         "Return JSON only with this exact shape:",
         "{",
         '  "suggestions": [',
         '    {"id":"","ledgerHead":"","voucherType":"Payment|Receipt|Contra","confidence":"high|medium|low","rationale":""}',
         "  ]",
         "}",
-        `Choose ledgerHead only from this list: ${ledgerHeads.map((item) => item.name).join(", ")}`,
-        "Be conservative when the narration is ambiguous.",
-      ].join("\n"),
+        `Choose ledgerHead only from this list: ${ledgerOptions}`,
+        "Be conservative when the narration is ambiguous. If multiple ledgers seem applicable, choose the most specific one.",
+      ].filter(l => l !== "").join("\n"),
       contentBlocks: [
         {
           type: "text",
@@ -110,6 +116,8 @@ async function analyzeRecommendations(file, context = {}) {
     })
     .filter(Boolean);
 
+  const availableLedgers = getAvailableLedgers(context.userId, context.companyName);
+
   const aiSuggestions = await requestAiSuggestions(
     normalizedRows.map((row) => ({
       id: row.id,
@@ -117,7 +125,8 @@ async function analyzeRecommendations(file, context = {}) {
       debit: row.debit,
       credit: row.credit,
       currentLedger: row.currentLedger,
-    }))
+    })),
+    availableLedgers
   );
 
   const aiById = new Map(aiSuggestions.map((suggestion) => [suggestion.id, suggestion]));

@@ -831,7 +831,7 @@ function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubm
       <div className="grid w-full max-w-[1080px] overflow-hidden rounded-[28px] bg-white shadow-[0_30px_80px_rgba(15,23,42,0.28)] lg:grid-cols-[0.95fr_1.05fr]">
         <div className="flex flex-col justify-between bg-[#1E1B4B] p-8 text-white">
           <div>
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em]">
+            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ">
               <ShieldCheck className="h-4 w-4" />
               Secure Workspace Access
             </div>
@@ -1482,6 +1482,7 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [activity, setActivity] = useState([]);
   const [syncHistory, setSyncHistory] = useState([]);
+  const [syncingLedgers, setSyncingLedgers] = useState(false);
 
   const [bankStatement, setBankStatement] = useState(createEmptyBankStatement());
   const [bankRows, setBankRows] = useState(normalizeBankRows(createEmptyBankStatement()));
@@ -2318,6 +2319,28 @@ export default function App() {
     });
   }
 
+  async function onSyncLedgers() {
+    if (syncingLedgers) return;
+    setSyncingLedgers(true);
+    try {
+      const result = await apiPost("/sync-ledgers");
+      addToast({
+        title: "Sync Complete",
+        message: `Successfully synced ${result.count} ledgers from ${result.company}.`,
+        type: "success",
+      });
+      fetchLedgers().then((payload) => setLedgerHeads(payload.ledgerHeads || []));
+    } catch (error) {
+      addToast({
+        title: "Sync Failed",
+        message: error.message || "Could not sync ledgers from Tally.",
+        type: "error",
+      });
+    } finally {
+      setSyncingLedgers(false);
+    }
+  }
+
   const bankRecommendationCards = bankRows.filter((row) => row.status === "pending").slice(0, 8);
   const speedyGroups = useMemo(() => buildSpeedyGroups(bankRows), [bankRows]);
   const recommendationCards = recommendationRows.filter((row) => row.status === "pending").slice(0, 8);
@@ -2911,6 +2934,8 @@ export default function App() {
                 onConnectTally={handlePairing}
                 onTestAI={handleTestAi}
                 tallyStatus={tallyStatus}
+                onSyncLedgers={onSyncLedgers}
+                syncingLedgers={syncingLedgers}
                 busy={busy}
               />
             ) : null}
@@ -3201,7 +3226,7 @@ function ClientsPage({ clients, documentRequests, bankOptions, clientForm, setCl
   );
 }
 
-function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, onConnectTally, onTestAI, tallyStatus, busy }) {
+function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, onConnectTally, onSyncLedgers, syncingLedgers, onTestAI, tallyStatus, busy }) {
   const connectorReleasesUrl = "https://github.com/mukundankandas5-ctrl/tally/releases/latest";
 
   return (
@@ -3278,6 +3303,19 @@ function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, o
           <div className="rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-4 py-2 text-sm text-[#6B7280]">
             Backend URL for the connector: <strong className="select-all text-[#111827]">{window.location.origin}</strong>
           </div>
+          <Button
+            variant="ghost"
+            className="border-[#7C3AED] text-[#7C3AED] hover:bg-[#F5F3FF]"
+            onClick={onSyncLedgers}
+            disabled={syncingLedgers || !tallyStatus.tallyConnected}
+          >
+            {syncingLedgers ? (
+              <RefreshCw className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            {syncingLedgers ? "Syncing..." : "Sync Ledgers from Tally"}
+          </Button>
         </div>
       </SettingsCard>
 

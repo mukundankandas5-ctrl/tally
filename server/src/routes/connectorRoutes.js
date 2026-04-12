@@ -2,6 +2,7 @@ const express = require("express");
 const { requireAuth } = require("../middleware/auth");
 const { createPairingCodeForUser, completePairing } = require("../services/pairingService");
 const { getDeviceStatusForUser, queuePushToUserDevice } = require("../services/connectorHub");
+const { syncLedgersForUser } = require("../services/ledgerService");
 
 const router = express.Router();
 
@@ -46,6 +47,19 @@ router.post("/push-to-tally", requireAuth, express.json({ limit: "20mb" }), asyn
       status: result.success ? "completed" : "failed",
       ...result,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/sync-ledgers", requireAuth, async (req, res, next) => {
+  try {
+    const status = getDeviceStatusForUser(req.auth.userId);
+    if (!status.tallyConnected) {
+      throw Object.assign(new Error("Tally is not reachable"), { statusCode: 503 });
+    }
+    const ledgers = await syncLedgersForUser(req.auth.userId, status.tallyCompany);
+    res.json({ success: true, count: ledgers.length, company: status.tallyCompany });
   } catch (error) {
     next(error);
   }

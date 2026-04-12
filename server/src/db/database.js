@@ -127,6 +127,18 @@ db.exec(`
     status TEXT NOT NULL DEFAULT 'Success',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS tally_ledgers (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    company_name TEXT NOT NULL,
+    name TEXT NOT NULL,
+    parent TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, company_name, name)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_tally_ledgers_user_company ON tally_ledgers(user_id, company_name);
 `);
 
 try {
@@ -534,6 +546,33 @@ function upsertMappingRule({
   return id;
 }
 
+function saveTallyLedgers(userId, companyName, ledgers = []) {
+  if (!userId || !companyName) return;
+
+  const deleteStmt = db.prepare("DELETE FROM tally_ledgers WHERE user_id = ? AND company_name = ?");
+  const insertStmt = db.prepare(
+    `INSERT INTO tally_ledgers (id, user_id, company_name, name, parent, updated_at)
+     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+  );
+
+  const tx = db.transaction((items) => {
+    deleteStmt.run(userId, companyName);
+    for (const item of items) {
+      const id = `ldg-${userId}-${companyName}-${item.name}-${Math.random().toString(16).slice(2)}`.replace(/[^a-z0-9-]/gi, "");
+      insertStmt.run(id.slice(0, 100), userId, companyName, item.name, item.parent || "");
+    }
+  });
+
+  tx(ledgers);
+}
+
+function getTallyLedgers(userId, companyName) {
+  if (!userId || !companyName) return [];
+  return db
+    .prepare("SELECT name, parent FROM tally_ledgers WHERE user_id = ? AND company_name = ? ORDER BY name ASC")
+    .all(userId, companyName);
+}
+
 module.exports = {
   createClient,
   createDocumentRequest,
@@ -562,4 +601,6 @@ module.exports = {
   queuePendingPush,
   getPendingPushes,
   updatePendingPushStatus,
+  saveTallyLedgers,
+  getTallyLedgers,
 };

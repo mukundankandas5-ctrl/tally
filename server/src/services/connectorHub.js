@@ -6,6 +6,7 @@ const { queuePendingPush } = require("../db/database");
 
 const connectedDevices = new Map();
 const pendingPushes = new Map();
+const pendingLedgerRequests = new Map();
 
 function safeJsonParse(rawMessage) {
   try {
@@ -47,6 +48,28 @@ function rejectPendingPush(entryId, error) {
 
   clearTimeout(pending.timeoutId);
   pendingPushes.delete(entryId);
+  pending.reject(error);
+}
+
+function resolvePendingLedgerRequest(requestId, payload) {
+  const pending = pendingLedgerRequests.get(requestId);
+  if (!pending) {
+    return;
+  }
+
+  clearTimeout(pending.timeoutId);
+  pendingLedgerRequests.delete(requestId);
+  pending.resolve(payload);
+}
+
+function rejectPendingLedgerRequest(requestId, error) {
+  const pending = pendingLedgerRequests.get(requestId);
+  if (!pending) {
+    return;
+  }
+
+  clearTimeout(pending.timeoutId);
+  pendingLedgerRequests.delete(requestId);
   pending.reject(error);
 }
 
@@ -120,6 +143,16 @@ function initializeConnectorWebSocket(server) {
           success: Boolean(message.success),
           response: cleanString(message.response),
         });
+        return;
+      }
+
+      if (message.type === "ledger_result") {
+        if (message.success) {
+          resolvePendingLedgerRequest(cleanString(message.requestId), message.xml);
+        } else {
+          rejectPendingLedgerRequest(cleanString(message.requestId), new Error(message.error || "Failed to fetch ledgers"));
+        }
+        return;
       }
     });
 
@@ -209,10 +242,39 @@ function queuePushToUserDevice(userId, xml, options = {}) {
   };
 }
 
+async function fetchLedgersFromUserDevice(userId) {
+  const linkedDevice = getDeviceByUserId(userId);
+  if (!linkedDevice) {
+    const error = new Error("Tally not connected");
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const device = connectedDevices.get(linkedDevice.deviceId);
+  if (!device || !device.ws || device.ws.readyState !== WebSocket.OPEN || !device.tallyConnected) {
+    const error = new Error("Tally connector is offline or Tally is not reachable.");
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const requestId = randomUUID();
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      pendingLedgerRequests.delete(requestId);
+      reject(Object.assign(new Error("Timed out waiting for Tally ledger sync."), { statusCode: 504 }));
+    }, 60000);
+
+    pendingLedgerRequests.set(requestId, { resolve, reject, timeoutId });
+
+    device.ws.send(JSON.stringify({ type: "get_ledgers", requestId }));
+  });
+}
+
 module.exports = {
   connectedDevices,
   getDeviceStatusForUser,
   initializeConnectorWebSocket,
   queuePushToUserDevice,
+  fetchLedgersFromUserDevice,
   rejectPendingPush,
 };
