@@ -133,6 +133,68 @@ const ALL_CATEGORIES = [
   "Petty Cash",
 ];
 
+const CATEGORY_LEDGER_FALLBACKS = {
+  "Sales / Revenue": "Sales",
+  "Service Income": "Miscellaneous Income",
+  "Interest Received": "Interest Income",
+  "Rental Income": "Rent",
+  "Commission Received": "Commission Paid",
+  "Refund Received": "Miscellaneous Income",
+  "Loan Disbursement Received": "Loan Account",
+  "Salary & Wages": "Salary",
+  "Rent Paid": "Rent",
+  "Electricity & Utilities": "Electricity",
+  "Office Supplies": "Office Expenses",
+  "Travel & Conveyance": "Travelling Expenses",
+  "Meals & Entertainment": "Office Expenses",
+  "Professional Fees": "Professional Fees",
+  "Software & Subscriptions": "Software Subscription",
+  "Advertising & Marketing": "Marketing Expenses",
+  "Repairs & Maintenance": "Repairs & Maintenance",
+  "Insurance Premium": "Insurance",
+  "Telephone & Internet": "Internet Charges",
+  "Printing & Stationery": "Printing & Stationery",
+  "Miscellaneous Expense": "Miscellaneous Expenses",
+  "GST Payment": "GST Payment",
+  "TDS Deducted": "TDS Payment",
+  "TDS Received": "Income Tax",
+  "Advance Tax": "Advance Tax",
+  "Professional Tax": "Income Tax",
+  "PF Contribution": "PF Contribution",
+  "ESI Contribution": "ESI Contribution",
+  "Bank Charges & Fees": "Bank Charges",
+  "Loan EMI Repayment": "Loan Account",
+  "Interest on Loan": "Interest on Loan",
+  "FD / Investment": "Loan Account",
+  "FD Maturity / Investment Return": "Interest Income",
+  "Inter-bank Transfer": "Transfer to Own Account",
+  "Vendor Payment": "Sundry Creditor",
+  "Customer Receipt": "Sundry Debtor",
+  "Director / Partner Drawing": "Drawings",
+  "Capital Contribution": "Capital Account",
+  "Petty Cash": "Petty Cash",
+};
+
+function deriveLedgerFromCategory(category, particulars = "", txnType = "") {
+  if (CATEGORY_LEDGER_FALLBACKS[category]) return CATEGORY_LEDGER_FALLBACKS[category];
+  const haystack = String(particulars || "").toLowerCase();
+  if (/swiggy|zomato/.test(haystack)) return "Office Expenses";
+  if (/amazon|flipkart|myntra|meesho/.test(haystack)) return "Office Expenses";
+  if (/irctc|makemytrip|cleartrip|uber|ola|rapido/.test(haystack)) return "Travelling Expenses";
+  if (/airtel|jio|bsnl|vodafone|vi/.test(haystack)) return "Internet Charges";
+  if (/bescom|msedcl|tneb|bses|kseb/.test(haystack)) return "Electricity";
+  if (/lic|sbi life|hdfc life|icici pru|bajaj/.test(haystack)) return "Insurance";
+  if (/gstn|cpin|gst payment/.test(haystack)) return "GST Payment";
+  if (/salary|payroll|wages/.test(haystack)) return "Salary";
+  if (/emi|loan/.test(haystack)) return "Loan Account";
+  if (txnType === "CREDIT") return "Customer Receipt";
+  return "Miscellaneous Expenses";
+}
+
+function markAsConfirmedIfClassified(row) {
+  return row.classificationStatus ? "confirmed" : row.classificationStatus;
+}
+
 const createId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 function cn(...values) {
@@ -175,7 +237,8 @@ function normalizeBankRows(statement) {
     debit: Number(row.debit || 0),
     credit: Number(row.credit || 0),
     category: row.category || row.ledgerHead || "Miscellaneous Expense",
-    ledger: row.ledgerHead || row.ledger || "Suspense",
+    autoLedger: deriveLedgerFromCategory(row.category || row.ledgerHead, row.particulars || row.narration, row.txnType),
+    ledger: row.ledgerHead || row.ledger || deriveLedgerFromCategory(row.category || row.ledgerHead, row.particulars || row.narration, row.txnType),
     voucherType: row.voucherType || "Payment",
     reasoning: row.reasoning || "",
     normalised: row.normalised || null,
@@ -200,10 +263,6 @@ function normalizeRecommendationRows(payload) {
     voucherType: row.suggestion?.voucherType || "Payment",
     original: row,
   }));
-}
-
-function markAsConfirmedIfClassified(row) {
-  return row.classificationStatus ? "confirmed" : row.classificationStatus;
 }
 
 function normalizeInvoiceRows(invoice) {
@@ -348,7 +407,7 @@ function AppIconButton({ children, className = "", ...props }) {
     <button
       type="button"
       className={cn(
-        "inline-flex items-center justify-center rounded-lg border border-[#E5E7EB] bg-white text-[#6B7280] transition hover:bg-[#F9FAFB]",
+        "inline-flex items-center justify-center rounded-2xl border border-white/60 bg-white/50 text-[#6B7280] shadow-[0_10px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:bg-white/70 hover:text-[#111827]",
         className
       )}
       {...props}
@@ -360,17 +419,21 @@ function AppIconButton({ children, className = "", ...props }) {
 
 function Button({ variant = "primary", className = "", children, ...props }) {
   const variants = {
-    primary: "bg-[#7C3AED] text-white hover:bg-[#6D28D9] border border-[#7C3AED]",
-    ghost: "bg-white text-[#374151] border border-[#D1D5DB] hover:bg-[#F9FAFB]",
-    outlinePurple: "bg-white text-[#7C3AED] border border-[#C4B5FD] hover:bg-[#F5F3FF]",
-    danger: "bg-white text-[#DC2626] border border-[#FCA5A5] hover:bg-[#FEF2F2]",
+    primary:
+      "bg-[linear-gradient(135deg,rgba(124,58,237,0.96)_0%,rgba(79,70,229,0.94)_100%)] text-white border border-white/30 shadow-[0_16px_40px_rgba(124,58,237,0.28)]",
+    ghost:
+      "bg-white/50 text-[#374151] border border-white/60 backdrop-blur-xl shadow-[0_10px_30px_rgba(15,23,42,0.08)] hover:bg-white/70",
+    outlinePurple:
+      "bg-white/45 text-[#7C3AED] border border-[#C4B5FD]/70 backdrop-blur-xl shadow-[0_10px_30px_rgba(124,58,237,0.08)] hover:bg-white/75",
+    danger:
+      "bg-white/50 text-[#DC2626] border border-[#FCA5A5]/70 backdrop-blur-xl shadow-[0_10px_30px_rgba(220,38,38,0.08)] hover:bg-white/75",
   };
 
   return (
     <button
       type="button"
       className={cn(
-        "inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex items-center gap-2 rounded-2xl px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 backdrop-blur-xl",
         variants[variant],
         className
       )}
@@ -645,7 +708,7 @@ function EditableCellSelect({ value, onChange, options }) {
     <select
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className="h-8 w-full rounded-md border border-transparent bg-transparent px-2 text-sm text-[#111827] outline-none hover:border-[#D1D5DB] focus:border-[#C4B5FD] focus:ring-2 focus:ring-[#F5F3FF]"
+      className="h-9 w-full rounded-2xl border border-white/60 bg-white/60 px-3 text-sm text-[#111827] shadow-[0_8px_24px_rgba(15,23,42,0.08)] outline-none backdrop-blur-xl transition hover:border-[#C4B5FD] hover:bg-white/75 focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]"
     >
       <option value="">Select...</option>
       {options.map((option) => (
@@ -664,7 +727,7 @@ function EditableAmountInput({ value, onChange, tone }) {
       value={value}
       onChange={(event) => onChange(Number(event.target.value))}
       className={cn(
-        "h-8 w-full rounded-md border border-transparent bg-transparent px-2 text-right text-sm outline-none hover:border-[#D1D5DB] focus:border-[#C4B5FD] focus:ring-2 focus:ring-[#F5F3FF]",
+        "h-9 w-full rounded-2xl border border-white/60 bg-white/60 px-3 text-right text-sm shadow-[0_8px_24px_rgba(15,23,42,0.08)] outline-none backdrop-blur-xl transition hover:border-[#C4B5FD] hover:bg-white/75 focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]",
         tone === "debit" ? "text-[#DC2626]" : "text-[#16A34A]"
       )}
     />
@@ -675,7 +738,7 @@ function ReasoningTooltip({ reasoning, confidenceScore }) {
   if (!reasoning) return null;
   return (
     <span
-      className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[#D1D5DB] bg-white text-[11px] font-semibold text-[#6B7280]"
+      className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-white/70 bg-white/60 text-[11px] font-semibold text-[#6B7280] backdrop-blur-xl shadow-[0_6px_18px_rgba(15,23,42,0.08)]"
       title={`${Math.round(Number(confidenceScore || 0) * 100)}% confident\n${reasoning}`}
     >
       i
@@ -707,11 +770,11 @@ function CategoryCell({ row, onCategorySave }) {
 
   if (editing) {
     return (
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 rounded-2xl border border-white/70 bg-white/55 p-1.5 shadow-[0_10px_26px_rgba(15,23,42,0.08)] backdrop-blur-xl">
         <select
           value={selected}
           onChange={(event) => setSelected(event.target.value)}
-          className="h-8 min-w-[145px] rounded-md border border-[#D1D5DB] bg-white px-2 text-xs text-[#111827] outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]"
+          className="h-9 min-w-[152px] rounded-2xl border border-white/70 bg-white/70 px-3 text-xs text-[#111827] outline-none backdrop-blur-xl focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]"
         >
           {ALL_CATEGORIES.map((category) => (
             <option key={category} value={category}>
@@ -723,7 +786,7 @@ function CategoryCell({ row, onCategorySave }) {
           type="button"
           onClick={handleSave}
           disabled={saving}
-          className="rounded-md border border-[#C4B5FD] bg-[#F5F3FF] px-2 py-1 text-xs font-medium text-[#6D28D9] disabled:opacity-60"
+          className="rounded-2xl border border-[#C4B5FD]/70 bg-white/70 px-3 py-2 text-xs font-semibold text-[#6D28D9] backdrop-blur-xl transition hover:bg-white/90 disabled:opacity-60"
         >
           {saving ? "..." : "Save"}
         </button>
@@ -733,7 +796,7 @@ function CategoryCell({ row, onCategorySave }) {
             setSelected(row.category || "Miscellaneous Expense");
             setEditing(false);
           }}
-          className="rounded-md border border-[#D1D5DB] bg-white px-2 py-1 text-xs text-[#4B5563]"
+          className="rounded-2xl border border-white/70 bg-white/55 px-3 py-2 text-xs text-[#4B5563] backdrop-blur-xl transition hover:bg-white/80"
         >
           Cancel
         </button>
@@ -752,7 +815,7 @@ function CategoryCell({ row, onCategorySave }) {
         }
       }}
       title={`Confidence: ${Math.round(Number(row.confidenceScore || 0) * 100)}% — click to correct`}
-      className="flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-1 text-xs text-[#111827] hover:border-[#D1D5DB]"
+      className="flex cursor-pointer items-center gap-2 rounded-2xl border border-white/70 bg-white/60 px-3 py-2 text-xs text-[#111827] shadow-[0_10px_28px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:border-[#C4B5FD] hover:bg-white/80"
     >
       <span className="truncate">{row.category || "Miscellaneous Expense"}</span>
       {Number(row.confidenceScore || 0) < 0.85 ? (
@@ -949,15 +1012,16 @@ function TableRow({
   const workflowStatus = row.status || "pending";
   const amountEditingEnabled = isSelected || workflowStatus !== "resolved";
   const isBankRow = rowType === "bank";
+  const displayLedger = row.ledger || row.autoLedger || deriveLedgerFromCategory(row.category || "", row.particulars || row.normalised?.cleaned || "", row.txnType || "");
   const gridTemplateColumns = isBankRow
-    ? "40px 120px 92px minmax(180px,0.8fr) 104px 104px 104px 150px 160px 140px"
+    ? "34px 96px 84px minmax(160px,1fr) 92px 92px 92px 132px 136px 124px"
     : "40px 100px 100px minmax(280px,1fr) 120px 120px 120px 200px 150px";
 
   return (
     <div
       className={cn(
-        "grid h-[52px] items-center border-b border-[#F3F4F6] bg-white text-sm transition hover:bg-[#F9FAFB]",
-        isSelected && "bg-[#F5F3FF]",
+        "grid h-[52px] items-center border-b border-white/60 bg-white/50 text-sm transition hover:bg-white/70",
+        isSelected && "bg-white/80",
         flash && "row-flash"
       )}
       style={{ gridTemplateColumns }}
@@ -992,7 +1056,7 @@ function TableRow({
             <CategoryCell row={row} onCategorySave={onCorrectTransaction} />
           </div>
           <div className="px-3">
-            <EditableCellSelect value={row.ledger} onChange={(value) => onFieldChange(row.id, "ledger", value)} options={ledgerOptions} />
+            <EditableCellSelect value={displayLedger} onChange={(value) => onFieldChange(row.id, "ledger", value)} options={ledgerOptions} />
           </div>
           <div className="px-3">
             <EditableCellSelect
@@ -1005,7 +1069,7 @@ function TableRow({
       ) : (
         <>
           <div className="px-3">
-            <EditableCellSelect value={row.ledger} onChange={(value) => onFieldChange(row.id, "ledger", value)} options={ledgerOptions} />
+            <EditableCellSelect value={displayLedger} onChange={(value) => onFieldChange(row.id, "ledger", value)} options={ledgerOptions} />
           </div>
           <div className="px-3">
             <EditableCellSelect
@@ -1074,11 +1138,11 @@ function EntryTable({
   const isBankRowType = rowType === "bank";
   const tableHeight = Math.min(visibleRows.length, 8) * ROW_HEIGHT + 44;
   const gridTemplateColumns = isBankRowType
-    ? "40px 120px 92px minmax(180px,0.8fr) 104px 104px 104px 150px 160px 140px"
+    ? "34px 96px 84px minmax(160px,1fr) 92px 92px 92px 132px 136px 124px"
     : "40px 100px 100px minmax(280px,1fr) 120px 120px 120px 200px 150px";
 
   const renderHeader = (
-    <div className="grid h-11 items-center bg-[#F9FAFB] text-xs uppercase tracking-[0.08em] text-[#6B7280]" style={{ gridTemplateColumns }}>
+    <div className="grid h-11 items-center bg-white/55 text-xs uppercase tracking-[0.08em] text-[#6B7280] backdrop-blur-xl" style={{ gridTemplateColumns }}>
       <div className="flex items-center justify-center">
         <input type="checkbox" checked={allVisibleSelected} onChange={onToggleAll} className="h-4 w-4 accent-[#7C3AED]" />
       </div>
@@ -1104,8 +1168,8 @@ function EntryTable({
   );
 
   return (
-    <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-      <div className="border-b border-[#E5E7EB] px-5 py-4">
+    <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel">
+      <div className="border-b border-white/50 px-5 py-4">
         <div className="text-lg font-semibold text-[#111827]">{title}</div>
         <div className="mt-1 text-sm text-[#6B7280]">{subtitle}</div>
       </div>
@@ -1114,7 +1178,7 @@ function EntryTable({
         <div className="no-scrollbar -mx-1 flex gap-3 overflow-x-auto px-1 pb-2">
           {recommendationCards.length ? (
             recommendationCards.map((card) => (
-              <div key={card.id} className="fade-in min-w-[280px] rounded-xl border border-[#E5E7EB] bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+              <div key={card.id} className="fade-in min-w-[280px] rounded-3xl border border-white/70 bg-white/55 p-4 shadow-[0_10px_30px_rgba(15,23,42,0.08)] backdrop-blur-xl">
                 <div className="border-l-[3px] border-[#7C3AED] pl-3">
                   <div className="line-clamp-2 text-sm font-semibold text-[#111827]">{card.particulars}</div>
                   <div className="mt-2 text-sm text-[#7C3AED]">{card.ledger}</div>
@@ -1130,13 +1194,13 @@ function EntryTable({
               </div>
             ))
           ) : (
-            <div className="rounded-xl border border-dashed border-[#D1D5DB] bg-[#F9FAFB] px-4 py-6 text-sm text-[#6B7280]">
+            <div className="rounded-3xl border border-dashed border-white/70 bg-white/40 px-4 py-6 text-sm text-[#6B7280] backdrop-blur-xl">
               No recommendation cards for the current selection.
             </div>
           )}
         </div>
 
-        <div className="mt-4 flex flex-col gap-3 rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] p-4">
+        <div className="mt-4 flex flex-col gap-3 rounded-3xl border border-white/70 bg-white/45 p-4 backdrop-blur-xl">
           <div className="text-sm font-medium text-[#111827]">Adjustment instructions</div>
           <div className="flex flex-col gap-3 lg:flex-row">
             <textarea
@@ -1194,7 +1258,7 @@ function EntryTable({
           </div>
         </div>
 
-        <div className="mt-4 border-t border-[#E5E7EB]" />
+        <div className="mt-4 border-t border-white/50" />
 
         {visibleSelectedCount > 0 ? (
           <div className="sticky top-[68px] z-10 mt-4 flex items-center justify-between rounded-lg bg-[#1E1B4B] px-4 py-3 text-sm text-white shadow-[0_12px_30px_rgba(30,27,75,0.22)]">
@@ -1221,9 +1285,9 @@ function EntryTable({
           </div>
         ) : null}
 
-        <div className="mt-4 overflow-hidden rounded-xl border border-[#E5E7EB]">
+        <div className="mt-4 overflow-hidden rounded-[28px] border border-white/70 bg-white/35 backdrop-blur-2xl shadow-[0_18px_60px_rgba(15,23,42,0.08)]">
           <div className="overflow-x-auto">
-            <div className={cn(isBankRowType ? "min-w-[1220px]" : "min-w-[1070px]")}>
+            <div className={cn(isBankRowType ? "min-w-[1120px]" : "min-w-[1070px]")}>
               {renderHeader}
               {visibleRows.length > 100 ? (
                 <List
@@ -1264,7 +1328,7 @@ function EntryTable({
           </div>
         </div>
 
-        <div className="sticky bottom-0 mt-0 flex flex-col gap-3 border-t border-[#E5E7EB] bg-[#F9FAFB] px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="sticky bottom-0 mt-0 flex flex-col gap-3 border-t border-white/50 bg-white/55 px-5 py-4 backdrop-blur-2xl lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-4 text-sm text-[#4B5563]">
             <span>Total rows: {visibleRows.length}</span>
             <span>Selected: {visibleSelectedCount}</span>
@@ -1469,7 +1533,17 @@ export default function App() {
   const activeClient = clients.find((item) => item.id === bankProcessingConfig.clientId) || clients[0];
   const pageTitle = navigation.find((item) => item.id === activePage)?.label || "Dashboard";
   const ledgerOptions = useMemo(
-    () => Array.from(new Set([...ledgerHeads.map((item) => item.name), "Suspense", "Suspense A/c", "Remittance"])),
+    () =>
+      Array.from(
+        new Set([
+          ...ledgerHeads.map((item) => item.name),
+          ...Object.values(CATEGORY_LEDGER_FALLBACKS),
+          "Bank Account",
+          "Suspense",
+          "Suspense A/c",
+          "Remittance",
+        ])
+      ),
     [ledgerHeads]
   );
 
@@ -1890,9 +1964,10 @@ export default function App() {
 
   async function handleTransactionCorrection(row, nextCategory) {
     try {
+      const nextLedger = deriveLedgerFromCategory(nextCategory, row.particulars || row.normalised?.cleaned || "", row.txnType || "");
       await correctTransaction(row.id, {
         category: nextCategory,
-        ledger: row.ledger,
+        ledger: nextLedger,
         voucher_type: row.voucherType,
         narration: row.normalised?.cleaned || row.particulars || "",
         upiVpa: row.upiVpa || "",
@@ -1905,6 +1980,7 @@ export default function App() {
             ? {
                 ...item,
                 category: nextCategory,
+                ledger: nextLedger,
                 classificationStatus: "confirmed",
                 status: "resolved",
               }
@@ -2279,11 +2355,16 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-white text-[#111827]">
+    <div className="relative min-h-screen overflow-hidden text-[#111827]">
+      <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
+        <div className="absolute -left-24 top-8 h-80 w-80 rounded-full bg-[#A78BFA]/20 blur-3xl" />
+        <div className="absolute right-[-4rem] top-28 h-96 w-96 rounded-full bg-[#67E8F9]/18 blur-3xl" />
+        <div className="absolute bottom-[-5rem] left-1/3 h-96 w-96 rounded-full bg-[#F9A8D4]/14 blur-3xl" />
+      </div>
       <div className="flex min-h-screen">
         <aside
           className={cn(
-            "fixed inset-y-0 left-0 z-30 flex flex-col border-r border-white/10 bg-[#1E1B4B] text-white transition-all duration-200 md:translate-x-0",
+            "fixed inset-y-0 left-0 z-30 flex flex-col border-r border-white/20 bg-[#1E1B4B]/86 text-white shadow-[0_24px_80px_rgba(15,23,42,0.28)] backdrop-blur-2xl transition-all duration-200 md:translate-x-0",
             mobileSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
           )}
           style={{ width: sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH }}
@@ -2355,7 +2436,7 @@ export default function App() {
         {mobileSidebarOpen ? <button type="button" className="fixed inset-0 z-20 bg-black/20 md:hidden" onClick={() => setMobileSidebarOpen(false)} /> : null}
 
         <div className="flex-1 md:ml-[220px]" style={{ marginLeft: sidebarCollapsed && window.innerWidth >= 768 ? SIDEBAR_COLLAPSED_WIDTH : undefined }}>
-          <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-[#E5E7EB] bg-white px-4 md:px-6">
+          <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-white/60 bg-white/55 px-4 backdrop-blur-2xl md:px-6">
             <div className="flex items-center gap-3">
               <AppIconButton className="h-9 w-9 md:hidden" onClick={() => setMobileSidebarOpen(true)}>
                 <Menu className="h-4 w-4" />
@@ -2398,7 +2479,7 @@ export default function App() {
                   {dashboardStats.map((card) => {
                     const Icon = card.icon;
                     return (
-                      <div key={card.label} className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                      <div key={card.label} className="glass-panel rounded-3xl border border-white/70 p-5">
                         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#F5F3FF] text-[#7C3AED]">
                           <Icon className="h-5 w-5" />
                         </div>
@@ -2411,8 +2492,8 @@ export default function App() {
                 </div>
 
                 <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-                  <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-                    <div className="border-b border-[#E5E7EB] px-5 py-4 text-lg font-semibold">Recent Activity</div>
+                  <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel">
+                    <div className="border-b border-white/50 px-5 py-4 text-lg font-semibold">Recent Activity</div>
                     {activity.length > 0 ? (
                       <div className="divide-y divide-[#F3F4F6]">
                         {activity.map((item) => (
@@ -2439,8 +2520,8 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-                    <div className="border-b border-[#E5E7EB] px-5 py-4 text-lg font-semibold">Tally Sync History</div>
+                  <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel">
+                    <div className="border-b border-white/50 px-5 py-4 text-lg font-semibold">Tally Sync History</div>
                     <div className="overflow-x-auto">
                       <table className="min-w-full text-sm">
                         <thead className="bg-[#F9FAFB] text-left text-xs uppercase tracking-[0.08em] text-[#6B7280]">
@@ -2470,7 +2551,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                <div className="glass-panel rounded-[28px] border border-white/70 p-5">
                   <div className="text-lg font-semibold text-[#111827]">Quick Actions</div>
                   <div className="mt-4 grid gap-4 grid-cols-2 lg:grid-cols-4">
                     <Button variant="primary" onClick={() => setActivePage("bank")} className="w-full justify-center">Upload Bank Statement</Button>
@@ -2517,7 +2598,7 @@ export default function App() {
                       accept="application/pdf"
                       onSelect={handleBankUpload}
                     />
-                    <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                    <div className="glass-panel rounded-[28px] border border-white/70 p-5">
                       <div className="text-sm font-semibold text-[#111827]">Processing Configuration</div>
                       <div className="mt-4 space-y-4">
                         <Field label="Client / Company">
@@ -2602,7 +2683,7 @@ export default function App() {
                         </div>
                       </div>
                     </div>
-                    <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                    <div className="glass-panel rounded-[28px] border border-white/70 p-5">
                       <div className="flex items-center justify-between">
                         <div>
                           <div className="text-sm font-semibold text-[#111827]">Bulk Processing Queue</div>
@@ -2639,7 +2720,7 @@ export default function App() {
                         )}
                       </div>
                     </div>
-                    <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                    <div className="glass-panel rounded-[28px] border border-white/70 p-5">
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <div className="text-[13px] text-[#6B7280]">Total Debits</div>
@@ -2660,7 +2741,7 @@ export default function App() {
                   </div>
 
                   <div className="space-y-4">
-                    <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                    <div className="glass-panel rounded-[28px] border border-white/70 p-5">
                       <div className="flex items-center justify-between">
                         <div>
                           <div className="text-lg font-semibold text-[#111827]">Smart Categorization</div>
@@ -2731,7 +2812,7 @@ export default function App() {
                       accept="application/pdf,image/png,image/jpeg"
                       onSelect={handleInvoiceUpload}
                     />
-                    <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                    <div className="glass-panel rounded-[28px] border border-white/70 p-5">
                       <div className="flex justify-between items-start">
                         <div>
                           <div className="text-[13px] font-medium text-[#6B7280] uppercase tracking-wider">Invoice Details</div>
@@ -2785,7 +2866,7 @@ export default function App() {
                     accept=".xlsx,.xls,.csv"
                     onSelect={handleRecommendationUpload}
                   />
-                  <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                  <div className="glass-panel rounded-[28px] border border-white/70 p-5">
                     <div className="text-[13px] text-[#6B7280]">Learned mappings</div>
                     <div className="mt-1 text-xl font-semibold text-[#111827]">{formatNumber(recommendations.learningSummary?.learnedRuleCount || 0)}</div>
                     <div className="mt-2 text-sm text-[#6B7280]">Stored review patterns improving future classification.</div>
@@ -2866,7 +2947,7 @@ function GstPage({ report, onReconcile }) {
         <Button variant="primary" className="w-full justify-center" disabled={!files.gstr2b || !files.purchaseRegister} onClick={() => onReconcile(files.gstr2b, files.purchaseRegister)}>
           Reconcile
         </Button>
-        <details className="rounded-xl border border-[#E5E7EB] bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.08)] cursor-pointer group">
+        <details className="glass-panel rounded-[28px] border border-white/70 p-4 cursor-pointer group">
           <summary className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7C3AED] select-none outline-none">Supported Headers</summary>
           <div className="mt-3 space-y-2 text-[11px] text-[#6B7280]">
             <div><strong>Invoice:</strong> Vch No, Voucher No, Invoice No, Bill No</div>
@@ -2947,8 +3028,8 @@ function GstPage({ report, onReconcile }) {
 function HistoryPage({ activity, syncHistory }) {
   return (
     <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-      <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-        <div className="border-b border-[#E5E7EB] px-5 py-4 text-lg font-semibold">Recent Activity</div>
+      <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel">
+        <div className="border-b border-white/50 px-5 py-4 text-lg font-semibold">Recent Activity</div>
         <div className="divide-y divide-[#F3F4F6]">
           {activity.length > 0 ? activity.map((item) => (
             <div key={item.id} className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-[#F9FAFB] transition-colors">
@@ -2967,8 +3048,8 @@ function HistoryPage({ activity, syncHistory }) {
           )}
         </div>
       </div>
-      <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-        <div className="border-b border-[#E5E7EB] px-5 py-4 text-lg font-semibold">Tally Sync History</div>
+      <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel">
+        <div className="border-b border-white/50 px-5 py-4 text-lg font-semibold">Tally Sync History</div>
         <div className="overflow-x-auto">
           {syncHistory.length > 0 ? (
             <table className="min-w-full text-sm">
@@ -3012,8 +3093,8 @@ function ClientsPage({ clients, documentRequests, bankOptions, clientForm, setCl
   return (
     <div className="space-y-6">
       <div className="grid gap-6 md:grid-cols-[1.2fr_0.8fr]">
-        <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-          <div className="border-b border-[#E5E7EB] px-5 py-4 text-lg font-semibold text-[#111827]">Clients</div>
+        <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel">
+          <div className="border-b border-white/50 px-5 py-4 text-lg font-semibold text-[#111827]">Clients</div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="bg-[#F9FAFB] text-left text-xs uppercase tracking-[0.08em] text-[#6B7280]">
@@ -3041,8 +3122,8 @@ function ClientsPage({ clients, documentRequests, bankOptions, clientForm, setCl
           </div>
         </div>
 
-        <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)] flex flex-col max-h-[600px]">
-          <div className="border-b border-[#E5E7EB] px-5 py-4 shrink-0">
+        <div className="glass-panel flex max-h-[600px] flex-col rounded-[28px] border border-white/70 shadow-panel">
+          <div className="shrink-0 border-b border-white/50 px-5 py-4">
             <div className="text-lg font-semibold text-[#111827]">Document Inbox</div>
             <div className="mt-1 text-xs text-[#6B7280]">Pending and received files from clients.</div>
           </div>
@@ -3073,7 +3154,7 @@ function ClientsPage({ clients, documentRequests, bankOptions, clientForm, setCl
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
-        <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+        <div className="glass-panel rounded-[28px] border border-white/70 p-5">
           <div className="text-lg font-semibold text-[#111827]">Add Client</div>
           <div className="mt-5 space-y-4">
             <Field label="Client Name">
@@ -3093,7 +3174,7 @@ function ClientsPage({ clients, documentRequests, bankOptions, clientForm, setCl
           </div>
         </div>
 
-        <div className="rounded-xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+        <div className="glass-panel rounded-[28px] border border-white/70 p-5">
           <div className="text-lg font-semibold text-[#111827]">Request Documents</div>
           <div className="mt-5 space-y-4">
             <Field label="Client">
@@ -3264,8 +3345,8 @@ function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, o
 
 function SettingsCard({ title, children }) {
   return (
-    <div className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
-      <div className="border-b border-[#E5E7EB] px-5 py-4 text-lg font-semibold text-[#111827]">{title}</div>
+    <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel">
+      <div className="border-b border-white/50 px-5 py-4 text-lg font-semibold text-[#111827]">{title}</div>
       <div className="px-5 py-5">{children}</div>
     </div>
   );

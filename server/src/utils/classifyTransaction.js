@@ -207,6 +207,59 @@ function clampConfidence(value) {
   return Math.max(0, Math.min(1, numeric));
 }
 
+const CATEGORY_LEDGER_FALLBACKS = {
+  "Sales / Revenue": "Sales",
+  "Service Income": "Miscellaneous Income",
+  "Interest Received": "Interest Income",
+  "Rental Income": "Rent",
+  "Commission Received": "Commission Paid",
+  "Refund Received": "Miscellaneous Income",
+  "Loan Disbursement Received": "Loan Account",
+  "Salary & Wages": "Salary",
+  "Rent Paid": "Rent",
+  "Electricity & Utilities": "Electricity",
+  "Office Supplies": "Office Expenses",
+  "Travel & Conveyance": "Travelling Expenses",
+  "Meals & Entertainment": "Office Expenses",
+  "Professional Fees": "Professional Fees",
+  "Software & Subscriptions": "Software Subscription",
+  "Advertising & Marketing": "Marketing Expenses",
+  "Repairs & Maintenance": "Repairs & Maintenance",
+  "Insurance Premium": "Insurance",
+  "Telephone & Internet": "Internet Charges",
+  "Printing & Stationery": "Printing & Stationery",
+  "Miscellaneous Expense": "Miscellaneous Expenses",
+  "GST Payment": "GST Payment",
+  "TDS Deducted": "TDS Payment",
+  "TDS Received": "Income Tax",
+  "Advance Tax": "Advance Tax",
+  "Professional Tax": "Income Tax",
+  "PF Contribution": "PF Contribution",
+  "ESI Contribution": "ESI Contribution",
+  "Bank Charges & Fees": "Bank Charges",
+  "Loan EMI Repayment": "Loan Account",
+  "Interest on Loan": "Interest on Loan",
+  "FD / Investment": "Loan Account",
+  "FD Maturity / Investment Return": "Interest Income",
+  "Inter-bank Transfer": "Transfer to Own Account",
+  "Vendor Payment": "Sundry Creditor",
+  "Customer Receipt": "Sundry Debtor",
+  "Director / Partner Drawing": "Drawings",
+  "Capital Contribution": "Capital Account",
+  "Petty Cash": "Petty Cash",
+};
+
+function deriveLedgerName(category, normalised, txnType) {
+  const categoryLedger = CATEGORY_LEDGER_FALLBACKS[category];
+  if (categoryLedger) return categoryLedger;
+
+  const merchant = normalised?.detectedMerchant?.suggestedCategory;
+  if (merchant) return merchant;
+
+  if (txnType === "CREDIT") return "Customer Receipt";
+  return "Miscellaneous Expenses";
+}
+
 async function loadMappingRules(clientId, db) {
   if (!db || !clientId) return [];
 
@@ -298,7 +351,7 @@ async function classifyTransaction(rawNarration, amount, txnType, date, clientId
   return {
     reasoning: String(parsed.reasoning || "").trim(),
     category: String(parsed.category || "Miscellaneous Expense").trim(),
-    ledger: String(parsed.ledger || "Miscellaneous").trim(),
+    ledger: String(parsed.ledger || deriveLedgerName(parsed.category, normalised, txnType)).trim(),
     voucher_type: String(parsed.voucher_type || (txnType === "CREDIT" ? "Receipt" : "Payment")).trim(),
     confidence,
     flags: Array.isArray(parsed.flags) ? parsed.flags.map((item) => String(item)) : [],
