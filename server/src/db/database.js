@@ -63,9 +63,41 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS mapping_rules (
     id TEXT PRIMARY KEY,
     client_id TEXT,
-    condition_text TEXT NOT NULL,
+    condition_text TEXT,
+    pattern TEXT,
+    upi_vpa TEXT,
+    category TEXT,
     ledger TEXT NOT NULL,
     voucher_type TEXT NOT NULL,
+    source TEXT DEFAULT 'user_correction',
+    confidence_score REAL DEFAULT 1.0,
+    use_count INTEGER DEFAULT 1,
+    active INTEGER DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS transactions (
+    id TEXT PRIMARY KEY,
+    client_id TEXT,
+    narration TEXT NOT NULL DEFAULT '',
+    normalised_narration TEXT NOT NULL DEFAULT '',
+    upi_vpa TEXT,
+    amount REAL NOT NULL DEFAULT 0,
+    debit REAL NOT NULL DEFAULT 0,
+    credit REAL NOT NULL DEFAULT 0,
+    txn_type TEXT NOT NULL DEFAULT 'DEBIT',
+    date TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT 'Miscellaneous Expense',
+    ledger TEXT NOT NULL DEFAULT 'Miscellaneous',
+    voucher_type TEXT NOT NULL DEFAULT 'Payment',
+    confidence REAL NOT NULL DEFAULT 0,
+    confidence_label TEXT NOT NULL DEFAULT 'low',
+    reasoning TEXT NOT NULL DEFAULT '',
+    flags TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'flagged',
+    reviewed_at TEXT,
+    reviewed_by TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -102,6 +134,36 @@ try {
 } catch (e) {
   // Column already exists
 }
+
+function ensureColumn(tableName, columnDefinition) {
+  const columnName = columnDefinition.split(" ")[0];
+  try {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnDefinition};`);
+  } catch (error) {
+    if (!String(error.message || "").includes(`duplicate column name: ${columnName}`)) {
+      throw error;
+    }
+  }
+}
+
+ensureColumn("mapping_rules", "pattern TEXT");
+ensureColumn("mapping_rules", "upi_vpa TEXT");
+ensureColumn("mapping_rules", "category TEXT");
+ensureColumn("mapping_rules", "source TEXT DEFAULT 'user_correction'");
+ensureColumn("mapping_rules", "confidence_score REAL DEFAULT 1.0");
+ensureColumn("mapping_rules", "use_count INTEGER DEFAULT 1");
+ensureColumn("mapping_rules", "active INTEGER DEFAULT 1");
+ensureColumn("mapping_rules", "updated_at TEXT DEFAULT CURRENT_TIMESTAMP");
+ensureColumn("mapping_rules", "condition_text TEXT");
+
+db.exec("UPDATE mapping_rules SET pattern = COALESCE(NULLIF(pattern, ''), condition_text) WHERE pattern IS NULL OR pattern = '';");
+db.exec("UPDATE mapping_rules SET category = COALESCE(NULLIF(category, ''), ledger) WHERE category IS NULL OR category = '';");
+db.exec(
+  "UPDATE mapping_rules SET updated_at = COALESCE(NULLIF(updated_at, ''), created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL OR updated_at = '';"
+);
+
+db.exec("CREATE INDEX IF NOT EXISTS idx_mapping_rules_client ON mapping_rules(client_id, active);");
+db.exec("CREATE INDEX IF NOT EXISTS idx_transactions_client_date ON transactions(client_id, date);");
 
 // One-time cleanup: purge previously seeded demo data from deployed databases
 const seedClientIds = ["aurora", "bluewave", "greenleaf"];
@@ -338,6 +400,140 @@ function updatePendingPushStatus(id, status) {
   db.prepare("UPDATE pending_push_queue SET status = ? WHERE id = ?").run(status, id);
 }
 
+function confidenceToLabel(value) {
+  const numeric = Number(value || 0);
+  if (numeric >= 0.85) return "high";
+  if (numeric >= 0.6) return "medium";
+  return "low";
+}
+
+function saveTransactions(records = []) {
+  const rows = Array.isArray(records) ? records : [];
+  if (!rows.length) return;
+
+  const statement = db.prepare(
+    `INSERT INTO transactions (
+      id, client_id, narration, normalised_narration, upi_vpa, amount, debit, credit, txn_type, date,
+      category, ledger, voucher_type, confidence, confidence_label, reasoning, flags, status, created_at
+    ) VALUES (
+      @id, @client_id, @narration, @normalised_narration, @upi_vpa, @amount, @debit, @credit, @txn_type, @date,
+      @category, @ledger, @voucher_type, @confidence, @confidence_label, @reasoning, @flags, @status, @created_at
+    )`
+  );
+
+  const insertMany = db.transaction((items) => {
+    for (const row of items) {
+      statement.run({
+        id: row.id,
+        client_id: row.client_id || null,
+        narration: row.narration || "",
+        normalised_narration: row.normalised_narration || "",
+        upi_vpa: row.upi_vpa || null,
+        amount: Number(row.amount || 0),
+        debit: Number(row.debit || 0),
+        credit: Number(row.credit || 0),
+        txn_type: row.txn_type || "DEBIT",
+        date: row.date || "",
+        category: row.category || "Miscellaneous Expense",
+        ledger: row.ledger || "Miscellaneous",
+        voucher_type: row.voucher_type || "Payment",
+        confidence: Number(row.confidence || 0),
+        confidence_label: row.confidence_label || confidenceToLabel(row.confidence),
+        reasoning: row.reasoning || "",
+        flags: row.flags || "[]",
+        status: row.status || "flagged",
+        created_at: row.created_at || new Date().toISOString(),
+      });
+    }
+  });
+
+  insertMany(rows);
+}
+
+function updateTransactionClassification({ id, category, ledger, voucherType, reviewedBy }) {
+  db.prepare(
+    `UPDATE transactions
+     SET category = ?,
+         ledger = ?,
+         voucher_type = ?,
+         status = 'confirmed',
+         reviewed_at = CURRENT_TIMESTAMP,
+         reviewed_by = ?
+     WHERE id = ?`
+  ).run(category, ledger, voucherType, reviewedBy || null, id);
+}
+
+function getClientMappingRules(clientId, limit = 20) {
+  if (!clientId) return [];
+  return db
+    .prepare(
+      `SELECT *
+       FROM mapping_rules
+       WHERE client_id = ? AND COALESCE(active, 1) = 1
+       ORDER BY COALESCE(confidence_score, 0) DESC, COALESCE(use_count, 0) DESC, updated_at DESC
+       LIMIT ?`
+    )
+    .all(clientId, limit);
+}
+
+function upsertMappingRule({
+  clientId,
+  pattern,
+  upiVpa,
+  category,
+  ledger,
+  voucherType,
+  source = "user_correction",
+  confidenceScore = 1.0,
+}) {
+  if (!clientId || !pattern) return;
+
+  const existing = db
+    .prepare(
+      `SELECT *
+       FROM mapping_rules
+       WHERE client_id = ? AND pattern = ?
+       ORDER BY updated_at DESC
+       LIMIT 1`
+    )
+    .get(clientId, pattern);
+
+  if (existing) {
+    db.prepare(
+      `UPDATE mapping_rules
+       SET upi_vpa = ?,
+           category = ?,
+           ledger = ?,
+           voucher_type = ?,
+           source = ?,
+           confidence_score = ?,
+           use_count = COALESCE(use_count, 0) + 1,
+           active = 1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).run(
+      upiVpa || existing.upi_vpa || null,
+      category,
+      ledger,
+      voucherType,
+      source,
+      Number(confidenceScore || existing.confidence_score || 1),
+      existing.id
+    );
+    return existing.id;
+  }
+
+  const id = `rule-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  db.prepare(
+    `INSERT INTO mapping_rules (
+      id, client_id, condition_text, pattern, upi_vpa, category, ledger, voucher_type,
+      source, confidence_score, use_count, active, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+  ).run(id, clientId, pattern, pattern, upiVpa || null, category, ledger, voucherType, source, Number(confidenceScore || 1));
+
+  return id;
+}
+
 module.exports = {
   createClient,
   createDocumentRequest,
@@ -348,6 +544,10 @@ module.exports = {
   findValidResetToken,
   listClients,
   listDocumentRequests,
+  getClientMappingRules,
+  saveTransactions,
+  updateTransactionClassification,
+  upsertMappingRule,
   listUsers,
   resetPassword,
   sanitizeUser,

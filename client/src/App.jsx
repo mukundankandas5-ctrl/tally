@@ -29,6 +29,7 @@ import * as XLSX from "xlsx";
 import {
   analyzeRecommendations,
   completeDocumentRequest,
+  correctTransaction,
   createClient,
   createPairingCode,
   createDocumentRequest,
@@ -78,14 +79,59 @@ const navigation = [
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
-const statusBadgeStyles = {
-  resolved: "bg-[#DCFCE7] text-[#16A34A]",
-  pending: "bg-[#FEF3C7] text-[#D97706]",
-  failed: "bg-[#FEE2E2] text-[#DC2626]",
+const STATUS_CONFIG = {
+  auto_mapped: { label: "Auto-mapped", style: "bg-[#DCFCE7] text-[#166534]", workflowStatus: "resolved" },
+  suggested: { label: "Review", style: "bg-[#FEF3C7] text-[#92400E]", workflowStatus: "pending" },
+  flagged: { label: "Needs input", style: "bg-[#FEE2E2] text-[#991B1B]", workflowStatus: "pending" },
+  confirmed: { label: "Confirmed", style: "bg-[#DBEAFE] text-[#1E40AF]", workflowStatus: "resolved" },
+  resolved: { label: "Resolved", style: "bg-[#DCFCE7] text-[#16A34A]", workflowStatus: "resolved" },
+  pending: { label: "Pending", style: "bg-[#FEF3C7] text-[#D97706]", workflowStatus: "pending" },
+  failed: { label: "Failed", style: "bg-[#FEE2E2] text-[#DC2626]", workflowStatus: "failed" },
 };
 
 const voucherOptions = ["Payment", "Receipt", "Contra", "Purchase", "Journal"];
 const bankOptions = ["Kotak Mahindra Bank", "HDFC Bank", "ICICI Bank", "Axis Bank", "SBI", "Union Bank of India", "Yes Bank", "IDFC First Bank"];
+const ALL_CATEGORIES = [
+  "Sales / Revenue",
+  "Service Income",
+  "Interest Received",
+  "Rental Income",
+  "Commission Received",
+  "Refund Received",
+  "Loan Disbursement Received",
+  "Salary & Wages",
+  "Rent Paid",
+  "Electricity & Utilities",
+  "Office Supplies",
+  "Travel & Conveyance",
+  "Meals & Entertainment",
+  "Professional Fees",
+  "Software & Subscriptions",
+  "Advertising & Marketing",
+  "Repairs & Maintenance",
+  "Insurance Premium",
+  "Telephone & Internet",
+  "Printing & Stationery",
+  "Miscellaneous Expense",
+  "GST Payment",
+  "TDS Deducted",
+  "TDS Received",
+  "Advance Tax",
+  "Professional Tax",
+  "PF Contribution",
+  "ESI Contribution",
+  "Bank Charges & Fees",
+  "Loan EMI Repayment",
+  "Interest on Loan",
+  "FD / Investment",
+  "FD Maturity / Investment Return",
+  "Inter-bank Transfer",
+  "Vendor Payment",
+  "Customer Receipt",
+  "Director / Partner Drawing",
+  "Capital Contribution",
+  "Petty Cash",
+];
 
 const createId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -93,8 +139,25 @@ function cn(...values) {
   return values.filter(Boolean).join(" ");
 }
 
-function buildStatusFromConfidence(confidence, unresolved) {
-  if (unresolved || confidence === "low") return "pending";
+function normalizeConfidenceScore(confidence, confidenceLabel) {
+  const numeric = Number(confidence);
+  if (Number.isFinite(numeric)) return Math.max(0, Math.min(1, numeric));
+  if (confidenceLabel === "high") return 0.9;
+  if (confidenceLabel === "low") return 0.45;
+  return 0.7;
+}
+
+function confidenceLabelFromScore(score) {
+  if (score >= 0.85) return "high";
+  if (score >= 0.6) return "medium";
+  return "low";
+}
+
+function normalizeWorkflowStatus(classificationStatus, confidenceLabel, needsReview) {
+  if (classificationStatus && STATUS_CONFIG[classificationStatus]) {
+    return STATUS_CONFIG[classificationStatus].workflowStatus;
+  }
+  if (needsReview || confidenceLabel === "low") return "pending";
   return "resolved";
 }
 
@@ -102,15 +165,22 @@ function normalizeBankRows(statement) {
   return (statement.transactions || []).map((row) => ({
     id: row.id,
     sourceId: row.id,
-    status: buildStatusFromConfidence(row.confidence, row.needsReview),
-    confidence: row.confidence || "medium",
+    classificationStatus: row.status || "",
+    status: normalizeWorkflowStatus(row.status, row.confidenceLabel || row.confidence, row.needsReview),
+    confidenceScore: normalizeConfidenceScore(row.confidence, row.confidenceLabel),
+    confidence: row.confidenceLabel || (typeof row.confidence === "string" ? row.confidence : confidenceLabelFromScore(normalizeConfidenceScore(row.confidence, row.confidenceLabel))),
     date: row.date,
     particulars: row.narration,
     amount: Number(row.debit || row.credit || 0),
     debit: Number(row.debit || 0),
     credit: Number(row.credit || 0),
-    ledger: row.ledgerHead || "Suspense",
+    category: row.category || row.ledgerHead || "Miscellaneous Expense",
+    ledger: row.ledgerHead || row.ledger || "Suspense",
     voucherType: row.voucherType || "Payment",
+    reasoning: row.reasoning || "",
+    normalised: row.normalised || null,
+    clientId: row.clientId || statement?.tallyConfig?.clientId || "",
+    upiVpa: row.upiVpa || row.normalised?.upiVpa || "",
     original: row,
   }));
 }
@@ -130,6 +200,10 @@ function normalizeRecommendationRows(payload) {
     voucherType: row.suggestion?.voucherType || "Payment",
     original: row,
   }));
+}
+
+function markAsConfirmedIfClassified(row) {
+  return row.classificationStatus ? "confirmed" : row.classificationStatus;
 }
 
 function normalizeInvoiceRows(invoice) {
@@ -260,6 +334,7 @@ function getVisibleRows(rows, filters) {
     const matchesQuery =
       !query ||
       row.particulars.toLowerCase().includes(query) ||
+      String(row.category || "").toLowerCase().includes(query) ||
       row.ledger.toLowerCase().includes(query) ||
       row.voucherType.toLowerCase().includes(query);
     const matchesStatus = filters.status === "all" || row.status === filters.status;
@@ -307,13 +382,15 @@ function Button({ variant = "primary", className = "", children, ...props }) {
 }
 
 function Badge({ status, confidence }) {
+  const config = STATUS_CONFIG[status] || STATUS_CONFIG.flagged;
+  const confidenceLabel = typeof confidence === "string" ? confidence : confidenceLabelFromScore(Number(confidence || 0));
   const dotClass =
-    confidence === "high" ? "bg-[#16A34A]" : confidence === "low" ? "bg-[#DC2626]" : "bg-[#D97706]";
+    confidenceLabel === "high" ? "bg-[#16A34A]" : confidenceLabel === "low" ? "bg-[#DC2626]" : "bg-[#D97706]";
 
   return (
-    <span className={cn("inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs font-medium", statusBadgeStyles[status])}>
+    <span className={cn("inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs font-medium", config.style)}>
       <span className={cn("h-2 w-2 rounded-full", dotClass)} />
-      {status === "resolved" ? "Resolved" : status === "failed" ? "Failed" : "Pending"}
+      {config.label}
     </span>
   );
 }
@@ -593,6 +670,97 @@ function EditableAmountInput({ value, onChange, tone }) {
   );
 }
 
+function ReasoningTooltip({ reasoning, confidenceScore }) {
+  if (!reasoning) return null;
+  return (
+    <span
+      className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[#D1D5DB] bg-white text-[11px] font-semibold text-[#6B7280]"
+      title={`${Math.round(Number(confidenceScore || 0) * 100)}% confident\n${reasoning}`}
+    >
+      i
+    </span>
+  );
+}
+
+function CategoryCell({ row, onCategorySave }) {
+  const [editing, setEditing] = useState(false);
+  const [selected, setSelected] = useState(row.category || "Miscellaneous Expense");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setSelected(row.category || "Miscellaneous Expense");
+  }, [row.category, row.id]);
+
+  async function handleSave() {
+    if (!onCategorySave) return;
+    try {
+      setSaving(true);
+      await onCategorySave(row, selected);
+      setEditing(false);
+    } catch (error) {
+      // keep the editor open so the user can retry or change selection
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-2">
+        <select
+          value={selected}
+          onChange={(event) => setSelected(event.target.value)}
+          className="h-8 min-w-[145px] rounded-md border border-[#D1D5DB] bg-white px-2 text-xs text-[#111827] outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#E9D5FF]"
+        >
+          {ALL_CATEGORIES.map((category) => (
+            <option key={category} value={category}>
+              {category}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          className="rounded-md border border-[#C4B5FD] bg-[#F5F3FF] px-2 py-1 text-xs font-medium text-[#6D28D9] disabled:opacity-60"
+        >
+          {saving ? "..." : "Save"}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setSelected(row.category || "Miscellaneous Expense");
+            setEditing(false);
+          }}
+          className="rounded-md border border-[#D1D5DB] bg-white px-2 py-1 text-xs text-[#4B5563]"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => setEditing(true)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          setEditing(true);
+        }
+      }}
+      title={`Confidence: ${Math.round(Number(row.confidenceScore || 0) * 100)}% — click to correct`}
+      className="flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-1 text-xs text-[#111827] hover:border-[#D1D5DB]"
+    >
+      <span className="truncate">{row.category || "Miscellaneous Expense"}</span>
+      {Number(row.confidenceScore || 0) < 0.85 ? (
+        <span className="text-[11px] text-[#6B7280]">✎</span>
+      ) : null}
+    </div>
+  );
+}
+
 function SignInPage({ mode, setMode, form, setForm, error, busy, message, onSubmit, showPassword, setShowPassword, supabaseEnabled }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-[linear-gradient(135deg,#1E1B4B_0%,#312E81_52%,#7C3AED_100%)] px-4 py-10">
@@ -774,8 +942,15 @@ function TableRow({
   onToggle,
   onFieldChange,
   ledgerOptions,
+  rowType,
+  onCorrectTransaction,
 }) {
-  const amountEditingEnabled = isSelected || row.status !== "resolved";
+  const workflowStatus = row.status || "pending";
+  const amountEditingEnabled = isSelected || workflowStatus !== "resolved";
+  const isBankRow = rowType === "bank";
+  const gridTemplateColumns = isBankRow
+    ? "40px 125px 100px minmax(220px,1fr) 120px 120px 120px 175px 175px 150px"
+    : "40px 100px 100px minmax(280px,1fr) 120px 120px 120px 200px 150px";
 
   return (
     <div
@@ -784,13 +959,14 @@ function TableRow({
         isSelected && "bg-[#F5F3FF]",
         flash && "row-flash"
       )}
-      style={{ gridTemplateColumns: "40px 100px 100px minmax(280px,1fr) 120px 120px 120px 200px 150px" }}
+      style={{ gridTemplateColumns }}
     >
       <div className="flex items-center justify-center">
         <input type="checkbox" checked={isSelected} onChange={() => onToggle(row.id)} className="h-4 w-4 accent-[#7C3AED]" />
       </div>
-      <div className="px-3">
-        <Badge status={row.status} confidence={row.confidence} />
+      <div className="flex items-center gap-2 px-3">
+        <Badge status={row.classificationStatus || row.status} confidence={row.confidenceScore || row.confidence} />
+        {isBankRow ? <ReasoningTooltip reasoning={row.reasoning} confidenceScore={row.confidenceScore} /> : null}
       </div>
       <div className="px-3 text-[#4B5563]">{formatDate(row.date)}</div>
       <div className="truncate px-3 text-[#111827]">{row.particulars}</div>
@@ -809,12 +985,36 @@ function TableRow({
           <div className="px-2 text-right text-sm font-medium text-[#16A34A]">{formatCurrency(row.credit)}</div>
         )}
       </div>
-      <div className="px-3">
-        <EditableCellSelect value={row.ledger} onChange={(value) => onFieldChange(row.id, "ledger", value)} options={ledgerOptions} />
-      </div>
-      <div className="px-3">
-        <EditableCellSelect value={row.voucherType} onChange={(value) => onFieldChange(row.id, "voucherType", value)} options={voucherOptions} />
-      </div>
+      {isBankRow ? (
+        <>
+          <div className="px-3">
+            <CategoryCell row={row} onCategorySave={onCorrectTransaction} />
+          </div>
+          <div className="px-3">
+            <EditableCellSelect value={row.ledger} onChange={(value) => onFieldChange(row.id, "ledger", value)} options={ledgerOptions} />
+          </div>
+          <div className="px-3">
+            <EditableCellSelect
+              value={row.voucherType}
+              onChange={(value) => onFieldChange(row.id, "voucherType", value)}
+              options={voucherOptions}
+            />
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="px-3">
+            <EditableCellSelect value={row.ledger} onChange={(value) => onFieldChange(row.id, "ledger", value)} options={ledgerOptions} />
+          </div>
+          <div className="px-3">
+            <EditableCellSelect
+              value={row.voucherType}
+              onChange={(value) => onFieldChange(row.id, "voucherType", value)}
+              options={voucherOptions}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -830,6 +1030,8 @@ function VirtualTableRow({ index, style, rowProps }) {
         onToggle={rowProps.onToggleRow}
         onFieldChange={rowProps.onFieldChange}
         ledgerOptions={rowProps.ledgerOptions}
+        rowType={rowProps.rowType}
+        onCorrectTransaction={rowProps.onCorrectTransaction}
       />
     </div>
   );
@@ -839,6 +1041,7 @@ function EntryTable({
   title,
   subtitle,
   rows,
+  rowType = "generic",
   ledgerOptions,
   filters,
   onFiltersChange,
@@ -857,6 +1060,7 @@ function EntryTable({
   onAiHintChange,
   onApplyAiHint,
   flashRowIds,
+  onCorrectTransaction,
 }) {
   const visibleRows = useMemo(() => getVisibleRows(rows, filters), [rows, filters]);
   const visibleSelectedCount = visibleRows.filter((row) => selectedRowIds.includes(row.id)).length;
@@ -866,10 +1070,14 @@ function EntryTable({
   const [bulkLedger, setBulkLedger] = useState(ledgerOptions[0] || "Suspense");
   const [showSuspensePopover, setShowSuspensePopover] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const isBankRowType = rowType === "bank";
   const tableHeight = Math.min(visibleRows.length, 8) * ROW_HEIGHT + 44;
+  const gridTemplateColumns = isBankRowType
+    ? "40px 125px 100px minmax(220px,1fr) 120px 120px 120px 175px 175px 150px"
+    : "40px 100px 100px minmax(280px,1fr) 120px 120px 120px 200px 150px";
 
   const renderHeader = (
-    <div className="grid h-11 items-center bg-[#F9FAFB] text-xs uppercase tracking-[0.08em] text-[#6B7280]" style={{ gridTemplateColumns: "40px 100px 100px minmax(280px,1fr) 120px 120px 120px 200px 150px" }}>
+    <div className="grid h-11 items-center bg-[#F9FAFB] text-xs uppercase tracking-[0.08em] text-[#6B7280]" style={{ gridTemplateColumns }}>
       <div className="flex items-center justify-center">
         <input type="checkbox" checked={allVisibleSelected} onChange={onToggleAll} className="h-4 w-4 accent-[#7C3AED]" />
       </div>
@@ -879,8 +1087,18 @@ function EntryTable({
       <div className="px-3 text-right font-medium">Amount</div>
       <div className="px-3 text-right font-medium">Debit</div>
       <div className="px-3 text-right font-medium">Credit</div>
-      <div className="px-3 font-medium">Ledger</div>
-      <div className="px-3 font-medium">Voucher Type</div>
+      {isBankRowType ? (
+        <>
+          <div className="px-3 font-medium">Category</div>
+          <div className="px-3 font-medium">Ledger</div>
+          <div className="px-3 font-medium">Voucher Type</div>
+        </>
+      ) : (
+        <>
+          <div className="px-3 font-medium">Ledger</div>
+          <div className="px-3 font-medium">Voucher Type</div>
+        </>
+      )}
     </div>
   );
 
@@ -1004,14 +1222,23 @@ function EntryTable({
 
         <div className="mt-4 overflow-hidden rounded-xl border border-[#E5E7EB]">
           <div className="overflow-x-auto">
-            <div className="min-w-[1070px]">
+            <div className={cn(isBankRowType ? "min-w-[1350px]" : "min-w-[1070px]")}>
               {renderHeader}
               {visibleRows.length > 100 ? (
                 <List
                   rowComponent={VirtualTableRow}
                   rowCount={visibleRows.length}
                   rowHeight={ROW_HEIGHT}
-                  rowProps={{ visibleRows, selectedRowIds, onToggleRow, onFieldChange, ledgerOptions, flashRowIds }}
+                  rowProps={{
+                    visibleRows,
+                    selectedRowIds,
+                    onToggleRow,
+                    onFieldChange,
+                    ledgerOptions,
+                    flashRowIds,
+                    rowType,
+                    onCorrectTransaction,
+                  }}
                   style={{ height: Math.min(visibleRows.length, 8) * ROW_HEIGHT }}
                 >
                 </List>
@@ -1026,6 +1253,8 @@ function EntryTable({
                       onToggle={onToggleRow}
                       onFieldChange={onFieldChange}
                       ledgerOptions={ledgerOptions}
+                      rowType={rowType}
+                      onCorrectTransaction={onCorrectTransaction}
                     />
                   ))}
                 </div>
@@ -1391,6 +1620,12 @@ export default function App() {
                     ? Number(value || 0) || Number(row.debit || 0)
                     : row.amount,
               status: field === "status" ? value : "resolved",
+              classificationStatus:
+                field === "status"
+                  ? row.classificationStatus
+                  : row.classificationStatus
+                    ? "confirmed"
+                    : row.classificationStatus,
               ...(field === "debit" && Number(value || 0) > 0 ? { credit: 0 } : {}),
               ...(field === "credit" && Number(value || 0) > 0 ? { debit: 0 } : {}),
             }
@@ -1596,6 +1831,7 @@ export default function App() {
           ...row.original,
           debit: row.debit,
           credit: row.credit,
+          category: row.category,
           ledgerHead: row.ledger,
           voucherType: row.voucherType,
           needsReview: row.status !== "resolved",
@@ -1638,6 +1874,7 @@ export default function App() {
           narration: row.particulars,
           debit: row.debit,
           credit: row.credit,
+          category: row.category,
           ledgerHead: row.ledger,
           voucherType: row.voucherType,
           debitAccount: row.debit > 0 ? row.ledger : bankProcessingConfig.bankLedgerName,
@@ -1648,6 +1885,37 @@ export default function App() {
       const payload = await learnBankStatement(statementPayload, bankHint);
       addToast(payload.message || "Learned current review.", "success");
     });
+  }
+
+  async function handleTransactionCorrection(row, nextCategory) {
+    try {
+      await correctTransaction(row.id, {
+        category: nextCategory,
+        ledger: row.ledger,
+        voucher_type: row.voucherType,
+        narration: row.normalised?.cleaned || row.particulars || "",
+        upiVpa: row.upiVpa || "",
+        clientId: row.clientId || bankProcessingConfig.clientId || "",
+      });
+
+      setBankRows((current) =>
+        current.map((item) =>
+          item.id === row.id
+            ? {
+                ...item,
+                category: nextCategory,
+                classificationStatus: "confirmed",
+                status: "resolved",
+              }
+            : item
+        )
+      );
+      withFlash([row.id]);
+      addToast("Saved correction and updated learned mapping rule.", "success");
+    } catch (error) {
+      addToast(error.message || "Could not save correction right now.", "error");
+      throw error;
+    }
   }
 
   async function handleBankDownloadXml() {
@@ -1675,6 +1943,7 @@ export default function App() {
           ...row.original,
           debit: row.debit,
           credit: row.credit,
+          category: row.category,
           ledgerHead: row.ledger,
           voucherType: row.voucherType,
           needsReview: false,
@@ -1739,6 +2008,7 @@ export default function App() {
               ...row,
               ledger: ledgerOrResolved !== "resolved" ? ledgerOrResolved : row.ledger,
               status: "resolved",
+              classificationStatus: markAsConfirmedIfClassified(row),
             }
           : row
       )
@@ -1748,13 +2018,21 @@ export default function App() {
 
   function mapSuspense(setter) {
     setter((current) =>
-      current.map((row) => (row.status !== "resolved" ? { ...row, ledger: "Suspense", status: "resolved" } : row))
+      current.map((row) =>
+        row.status !== "resolved"
+          ? { ...row, ledger: "Suspense", status: "resolved", classificationStatus: markAsConfirmedIfClassified(row) }
+          : row
+      )
     );
     addToast("Mapped unresolved entries to Suspense.", "success");
   }
 
   function approveRecommendationCard(id) {
-    setRecommendationRows((current) => current.map((row) => (row.id === id ? { ...row, status: "resolved" } : row)));
+    setRecommendationRows((current) =>
+      current.map((row) =>
+        row.id === id ? { ...row, status: "resolved", classificationStatus: markAsConfirmedIfClassified(row) } : row
+      )
+    );
     withFlash([id]);
   }
 
@@ -1767,6 +2045,7 @@ export default function App() {
               ledger: draft.ledger,
               voucherType: draft.voucherType,
               status: "resolved",
+              classificationStatus: markAsConfirmedIfClassified(row),
             }
           : row
       )
@@ -1783,6 +2062,7 @@ export default function App() {
           ? {
               ...row,
               status: "pending",
+              classificationStatus: row.classificationStatus === "auto_mapped" ? "suggested" : row.classificationStatus,
             }
           : row
       )
@@ -1799,6 +2079,7 @@ export default function App() {
       Amount: row.amount,
       Debit: row.debit,
       Credit: row.credit,
+      Category: row.category || "",
       Ledger: row.ledger,
       VoucherType: row.voucherType,
     }));
@@ -1839,6 +2120,7 @@ export default function App() {
           ...row.original,
           debit: row.debit,
           credit: row.credit,
+          category: row.category,
           ledgerHead: row.ledger,
           voucherType: row.voucherType,
           needsReview: false,
@@ -2393,6 +2675,7 @@ export default function App() {
                       title="Entry Management"
                       subtitle="Review grouped suggestions, modify specific rows, or leave unchecked rows unresolved for smaller batches later."
                       rows={bankRows}
+                      rowType="bank"
                       ledgerOptions={ledgerOptions}
                       filters={bankFilters}
                       onFiltersChange={setBankFilters}
@@ -2406,7 +2689,13 @@ export default function App() {
                       onSendToTally={handleBankPush}
                       recommendationCards={bankRecommendationCards}
                       onApproveRecommendation={(id) => {
-                        setBankRows((current) => current.map((row) => (row.id === id ? { ...row, status: "resolved" } : row)));
+                        setBankRows((current) =>
+                          current.map((row) =>
+                            row.id === id
+                              ? { ...row, status: "resolved", classificationStatus: markAsConfirmedIfClassified(row) }
+                              : row
+                          )
+                        );
                         withFlash([id]);
                       }}
                       aiHint={bankHint}
@@ -2414,6 +2703,7 @@ export default function App() {
                       onApplyAiHint={handleBankHintApply}
                       onDownloadXml={handleBankDownloadXml}
                       flashRowIds={flashRowIds}
+                      onCorrectTransaction={handleTransactionCorrection}
                     />
                   </div>
                 </div>

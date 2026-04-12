@@ -26,3 +26,5 @@ export const confidenceClassNames = {
   medium: "bg-amber-50 text-amber-700 ring-amber-200",
   low: "bg-rose-50 text-rose-700 ring-rose-200",
 };
+
+export const cn = (...values) => values.filter(Boolean).join(" ");

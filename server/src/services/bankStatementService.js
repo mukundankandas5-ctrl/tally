@@ -1,18 +1,22 @@
+const crypto = require("crypto");
 const pdfParse = require("pdf-parse");
 const { requestStructuredJson } = require("./anthropicService");
 const { applyLearnedMappings, getLearningSummary } = require("./learningService");
-const { ledgerHeads, defaultVoucherLedgers } = require("../constants/ledgerHeads");
+const {
+  saveTransactions,
+  getClientMappingRules,
+} = require("../db/database");
 const AppError = require("../utils/appError");
+const { classifyBatch } = require("../utils/classifyTransaction");
 const {
   cleanString,
   ensureArray,
   inferVoucherType,
-  makeIdentifier,
-  normalizeConfidence,
   toFixedAmount,
   toIsoDate,
   toNumber,
 } = require("../utils/normalizers");
+const { defaultVoucherLedgers } = require("../constants/ledgerHeads");
 
 function sanitizeUserInstructions(value) {
   return cleanString(value).slice(0, 4000);
@@ -46,82 +50,189 @@ function inferAccounts(transaction, fallbackBankLedger = defaultVoucherLedgers.b
     };
   }
 
-  if (voucherType === "Contra" && debit === 0 && credit === 0) {
-    return {
-      debitAccount: explicitDebitAccount || bankLedgerName,
-      creditAccount: explicitCreditAccount || ledgerHead,
-    };
-  }
-
   return {
     debitAccount: explicitDebitAccount || ledgerHead,
     creditAccount: explicitCreditAccount || bankLedgerName,
   };
 }
 
-function normalizeTransactions(payload, bankLedgerName = defaultVoucherLedgers.bankLedgerName) {
-  return ensureArray(payload.transactions).map((transaction, index) => {
-    const debit = toFixedAmount(transaction.debit);
-    const credit = toFixedAmount(transaction.credit);
-    const amount = debit > 0 ? debit : credit;
-    const confidence = normalizeConfidence(transaction.confidence);
-    const voucherType = cleanString(transaction.voucherType) || inferVoucherType(transaction);
-    const accounts = inferAccounts(
-      {
-        ...transaction,
-        voucherType,
-      },
-      bankLedgerName
-    );
-    const needsReview =
-      Boolean(transaction.needsReview) ||
-      confidence === "low" ||
-      !cleanString(transaction.ledgerHead);
-
-    return {
-      id: cleanString(transaction.id, makeIdentifier("txn", index)),
-      date: toIsoDate(transaction.date),
-      narration: cleanString(transaction.narration),
-      reference: cleanString(transaction.reference),
-      debit,
-      credit,
-      balance: toFixedAmount(transaction.balance),
-      amount,
-      ledgerHead: cleanString(transaction.ledgerHead),
-      confidence,
-      needsReview,
-      voucherType,
-      debitAccount: cleanString(accounts.debitAccount),
-      creditAccount: cleanString(accounts.creditAccount),
-      learningSource: cleanString(transaction.learningSource),
-    };
-  });
+function scoreToConfidenceLabel(score) {
+  const numeric = Number(score || 0);
+  if (numeric >= 0.85) return "high";
+  if (numeric >= 0.6) return "medium";
+  return "low";
 }
 
-function buildSummary(payload, transactions) {
-  const totalDebits = toFixedAmount(
-    payload.summary?.totalDebits ||
-      transactions.reduce((sum, transaction) => sum + toNumber(transaction.debit, 0), 0)
-  );
-  const totalCredits = toFixedAmount(
-    payload.summary?.totalCredits ||
-      transactions.reduce((sum, transaction) => sum + toNumber(transaction.credit, 0), 0)
-  );
+function statusToNeedsReview(status) {
+  return status === "suggested" || status === "flagged";
+}
 
+function statementConfidenceFromTransactions(transactions) {
+  if (!transactions.length) return "low";
+  const average = transactions.reduce((sum, txn) => sum + Number(txn.confidence || 0), 0) / transactions.length;
+  return scoreToConfidenceLabel(average);
+}
+
+function buildSummary(transactions) {
+  const sortedDates = transactions.map((transaction) => transaction.date).filter(Boolean).sort();
   return {
-    periodStart: toIsoDate(payload.summary?.periodStart),
-    periodEnd: toIsoDate(payload.summary?.periodEnd),
-    totalDebits,
-    totalCredits,
+    periodStart: sortedDates[0] || "",
+    periodEnd: sortedDates[sortedDates.length - 1] || "",
+    totalDebits: toFixedAmount(transactions.reduce((sum, transaction) => sum + toNumber(transaction.debit, 0), 0)),
+    totalCredits: toFixedAmount(transactions.reduce((sum, transaction) => sum + toNumber(transaction.credit, 0), 0)),
     transactionCount: transactions.length,
     reviewCount: transactions.filter((transaction) => transaction.needsReview).length,
   };
+}
+
+async function parseStatementRows(extractedText, userInstructions = "") {
+  const structured = await requestStructuredJson({
+    systemPrompt: [
+      "You are an expert parser for Indian bank statements.",
+      "Extract all transaction rows from the text exactly as they appear.",
+      "Do not classify into ledgers. Only extract structured transaction rows.",
+      "Return valid JSON with this exact shape:",
+      "{",
+      '  "summary": {',
+      '    "periodStart": "YYYY-MM-DD or empty string",',
+      '    "periodEnd": "YYYY-MM-DD or empty string"',
+      "  },",
+      '  "transactions": [',
+      "    {",
+      '      "date": "YYYY-MM-DD",',
+      '      "narration": "",',
+      '      "reference": "",',
+      '      "debit": 0,',
+      '      "credit": 0,',
+      '      "balance": 0',
+      "    }",
+      "  ]",
+      "}",
+      "Rules:",
+      "- Use debit and credit as positive numbers.",
+      "- If only one amount exists and row is debit/outflow set debit.",
+      "- If only one amount exists and row is credit/inflow set credit.",
+      "- Do not skip rows.",
+      "- Return JSON only.",
+    ].join("\n"),
+    contentBlocks: [
+      {
+        type: "text",
+        text: `Bank statement text:\n${extractedText}`,
+      },
+      ...(userInstructions
+        ? [
+            {
+              type: "text",
+              text: `User extraction guidance:\n${userInstructions}`,
+            },
+          ]
+        : []),
+    ],
+    maxTokens: 8192,
+  });
+
+  return structured;
+}
+
+function normalizeParsedRows(parsed = {}) {
+  return ensureArray(parsed.transactions)
+    .map((transaction) => {
+      const debit = toFixedAmount(transaction.debit);
+      const credit = toFixedAmount(transaction.credit);
+      const amount = debit > 0 ? debit : credit;
+      const narration = cleanString(transaction.narration);
+
+      return {
+        date: toIsoDate(transaction.date),
+        narration,
+        reference: cleanString(transaction.reference),
+        debit,
+        credit,
+        balance: toFixedAmount(transaction.balance),
+        amount,
+        txnType: credit > 0 ? "CREDIT" : "DEBIT",
+      };
+    })
+    .filter((row) => row.narration && Number(row.amount) > 0);
+}
+
+function toStatementTransaction(parsedRow, classification, bankLedgerName, clientId) {
+  const status = classification.status || "flagged";
+  const confidence = Number(classification.confidence || 0);
+  const voucherType = cleanString(classification.voucher_type) || (parsedRow.txnType === "CREDIT" ? "Receipt" : "Payment");
+  const ledgerHead = cleanString(classification.ledger) || cleanString(classification.category) || "Miscellaneous";
+  const accounts = inferAccounts(
+    {
+      ...parsedRow,
+      voucherType,
+      ledgerHead,
+      debit: parsedRow.debit,
+      credit: parsedRow.credit,
+    },
+    bankLedgerName
+  );
+
+  return {
+    id: crypto.randomUUID(),
+    clientId: cleanString(clientId),
+    date: parsedRow.date,
+    narration: parsedRow.narration,
+    reference: parsedRow.reference,
+    debit: parsedRow.debit,
+    credit: parsedRow.credit,
+    balance: parsedRow.balance,
+    amount: parsedRow.amount,
+    txnType: parsedRow.txnType,
+    category: cleanString(classification.category) || "Miscellaneous Expense",
+    ledgerHead,
+    ledger: ledgerHead,
+    voucherType,
+    debitAccount: cleanString(accounts.debitAccount),
+    creditAccount: cleanString(accounts.creditAccount),
+    confidence,
+    confidenceLabel: scoreToConfidenceLabel(confidence),
+    reasoning: cleanString(classification.reasoning),
+    flags: ensureArray(classification.flags),
+    status,
+    needsReview: statusToNeedsReview(status),
+    normalised: classification.normalised || null,
+    upiVpa: cleanString(classification.normalised?.upiVpa),
+  };
+}
+
+function persistTransactions(transactions, clientId) {
+  saveTransactions(
+    transactions.map((transaction) => ({
+      id: transaction.id,
+      client_id: cleanString(clientId),
+      narration: transaction.narration,
+      normalised_narration: cleanString(transaction.normalised?.cleaned),
+      upi_vpa: transaction.upiVpa || null,
+      amount: transaction.amount,
+      debit: transaction.debit,
+      credit: transaction.credit,
+      txn_type: transaction.txnType,
+      date: transaction.date,
+      category: transaction.category,
+      ledger: transaction.ledgerHead,
+      voucher_type: transaction.voucherType,
+      confidence: transaction.confidence,
+      confidence_label: transaction.confidenceLabel,
+      reasoning: transaction.reasoning,
+      flags: JSON.stringify(transaction.flags || []),
+      status: transaction.status,
+      created_at: new Date().toISOString(),
+    }))
+  );
 }
 
 async function analyzeBankStatement(file, userInstructions = "", context = {}) {
   if (!file) {
     throw new AppError("Please upload a bank statement PDF.", 400);
   }
+
+  const safeInstructions = sanitizeUserInstructions(userInstructions);
 
   let extractedText = "";
   try {
@@ -139,195 +250,108 @@ async function analyzeBankStatement(file, userInstructions = "", context = {}) {
     );
   }
 
-  const ledgerOptions = ledgerHeads.map((ledger) => ledger.name).join(", ");
-  const safeInstructions = sanitizeUserInstructions(userInstructions);
-  const learningSummary = getLearningSummary(context);
+  const parsed = await parseStatementRows(extractedText, safeInstructions);
+  const parsedRows = normalizeParsedRows(parsed);
 
-  const structured = await requestStructuredJson({
-    systemPrompt: [
-      "You are an expert Indian bank statement parser and Tally ledger classifier.",
-      "Parse every transaction row from the supplied bank statement text.",
-      "Return valid JSON with this exact shape:",
-      "{",
-      '  "confidence": "high|medium|low",',
-      '  "summary": {',
-      '    "periodStart": "YYYY-MM-DD or empty string",',
-      '    "periodEnd": "YYYY-MM-DD or empty string",',
-      '    "totalDebits": 0,',
-      '    "totalCredits": 0',
-      "  },",
-      '  "transactions": [',
-      "    {",
-      '      "id": "",',
-      '      "date": "YYYY-MM-DD",',
-      '      "narration": "",',
-      '      "reference": "",',
-      '      "debit": 0,',
-      '      "credit": 0,',
-      '      "balance": 0,',
-      `      "ledgerHead": "choose one of: ${ledgerOptions}",`,
-      '      "confidence": "high|medium|low",',
-      '      "needsReview": false,',
-      '      "voucherType": "Payment|Receipt|Contra",',
-      '      "debitAccount": "",',
-      '      "creditAccount": ""',
-      "    }",
-      "  ],",
-      '  "reviewNotes": [""]',
-      "}",
-      "Do not skip rows.",
-      "Use conservative low confidence when the narration is ambiguous.",
-      "For UPI transactions, identify the beneficiary or counterparty name from the narration whenever possible.",
-      "If the UPI counterparty appears to be an individual person and there is no strong business indicator, classify it as UPI Transfer.",
-      "If the UPI counterparty appears to be a business or organization, infer the most appropriate ledger based on the business name and transaction context, not merely UPI Transfer.",
-      "For IMPS and NEFT transactions, inspect the narration carefully for the sender or receiver name.",
-      "If a clear person or business name is present in IMPS or NEFT narration, use that actual counterparty name as the ledger head instead of a generic transfer label.",
-      "Only fall back to generic labels when no reliable counterparty name can be identified from the narration.",
-      "Treat internal transfers, FD bookings, sweep transfers, cash deposits, and cash withdrawals as Contra where appropriate.",
-      "Always return debitAccount and creditAccount to show which account is debited and which account is credited.",
-      "If the user provides custom classification instructions, follow them unless they clearly conflict with the transaction text.",
-      "Return JSON only.",
-    ].join("\n"),
-    contentBlocks: [
-      {
-        type: "text",
-        text: `Bank statement text:\n${extractedText}`,
-      },
-      ...(safeInstructions
-        ? [
-            {
-              type: "text",
-              text: `Additional user instructions:\n${safeInstructions}`,
-            },
-          ]
-        : []),
-      ...(learningSummary.learnedRuleCount
-        ? [
-            {
-              type: "text",
-              text: `Previously learned user preferences:\n${JSON.stringify(learningSummary, null, 2)}`,
-            },
-          ]
-        : []),
-    ],
-  });
+  if (!parsedRows.length) {
+    throw new AppError("Could not detect transactions from this PDF. Please upload a clearer text-based bank statement.", 422);
+  }
 
   const bankLedgerName = cleanString(context.bankLedgerName || defaultVoucherLedgers.bankLedgerName);
-  const transactions = applyLearnedMappings(normalizeTransactions(structured, bankLedgerName), context);
+  const clientId = cleanString(context.clientId);
+  const classifications = await classifyBatch(
+    parsedRows,
+    clientId,
+    { getClientMappingRules },
+    safeInstructions
+  );
+
+  let transactions = parsedRows.map((row, index) =>
+    toStatementTransaction(row, classifications[index] || {}, bankLedgerName, clientId)
+  );
+
+  transactions = applyLearnedMappings(transactions, context).map((transaction) => {
+    if (!cleanString(transaction.learningSource)) return transaction;
+    return {
+      ...transaction,
+      status: transaction.status === "auto_mapped" ? transaction.status : "confirmed",
+      needsReview: false,
+    };
+  });
+
+  persistTransactions(transactions, clientId);
+
+  const summary = buildSummary(transactions);
+  const confidence = statementConfidenceFromTransactions(transactions);
 
   return {
-    confidence: normalizeConfidence(structured.confidence),
-    summary: buildSummary(structured, transactions),
+    originalFileName: file.originalname || "",
+    confidence,
+    summary: {
+      ...summary,
+      periodStart: toIsoDate(parsed.summary?.periodStart) || summary.periodStart,
+      periodEnd: toIsoDate(parsed.summary?.periodEnd) || summary.periodEnd,
+    },
     transactions,
-    reviewNotes: ensureArray(structured.reviewNotes)
-      .map((note) => cleanString(note))
-      .filter(Boolean),
+    reviewNotes: [],
     tallyConfig: {
       companyName: cleanString(context.companyName),
-      clientId: cleanString(context.clientId),
+      clientId,
       bankName: cleanString(context.bankName),
       bankLedgerName,
     },
-    learningSummary,
+    learningSummary: getLearningSummary(context),
   };
 }
 
 async function reviseBankStatement(statement, userInstructions = "", context = {}) {
   const safeInstructions = sanitizeUserInstructions(userInstructions);
-
   if (!safeInstructions) {
     throw new AppError("Add instructions for the AI assistant before revising the bank statement output.", 400);
   }
 
+  const currentTransactions = ensureArray(statement?.transactions).map((transaction) => {
+    const debit = toFixedAmount(transaction.debit);
+    const credit = toFixedAmount(transaction.credit);
+    return {
+      date: toIsoDate(transaction.date),
+      narration: cleanString(transaction.narration),
+      reference: cleanString(transaction.reference),
+      debit,
+      credit,
+      balance: toFixedAmount(transaction.balance),
+      amount: debit > 0 ? debit : credit,
+      txnType: credit > 0 ? "CREDIT" : "DEBIT",
+    };
+  });
+
+  if (!currentTransactions.length) {
+    throw new AppError("No transactions available to revise.", 400);
+  }
+
   const bankLedgerName = cleanString(statement?.tallyConfig?.bankLedgerName || defaultVoucherLedgers.bankLedgerName);
-  const normalizedTransactions = normalizeTransactions(statement || {}, bankLedgerName);
-  const normalizedStatement = {
-    confidence: normalizeConfidence(statement?.confidence),
-    summary: buildSummary(statement || {}, normalizedTransactions),
-    transactions: normalizedTransactions,
-    reviewNotes: ensureArray(statement?.reviewNotes)
-      .map((note) => cleanString(note))
-      .filter(Boolean),
-    tallyConfig: {
-      companyName: cleanString(statement?.tallyConfig?.companyName),
-      bankLedgerName,
-    },
-  };
+  const clientId = cleanString(context.clientId || statement?.tallyConfig?.clientId);
+  const classifications = await classifyBatch(
+    currentTransactions,
+    clientId,
+    { getClientMappingRules },
+    safeInstructions
+  );
 
-  const ledgerOptions = ledgerHeads.map((ledger) => ledger.name).join(", ");
-  const structured = await requestStructuredJson({
-    systemPrompt: [
-      "You are an expert Indian accounting assistant revising already classified bank statement transactions.",
-      "You will receive the current structured bank statement JSON plus user instructions.",
-      "Return valid JSON with this exact shape:",
-      "{",
-      '  "confidence": "high|medium|low",',
-      '  "summary": {',
-      '    "periodStart": "YYYY-MM-DD or empty string",',
-      '    "periodEnd": "YYYY-MM-DD or empty string",',
-      '    "totalDebits": 0,',
-      '    "totalCredits": 0',
-      "  },",
-      '  "transactions": [',
-      "    {",
-      '      "id": "",',
-      '      "date": "YYYY-MM-DD",',
-      '      "narration": "",',
-      '      "reference": "",',
-      '      "debit": 0,',
-      '      "credit": 0,',
-      '      "balance": 0,',
-      `      "ledgerHead": "choose one of: ${ledgerOptions}",`,
-      '      "confidence": "high|medium|low",',
-      '      "needsReview": false,',
-      '      "voucherType": "Payment|Receipt|Contra",',
-      '      "debitAccount": "",',
-      '      "creditAccount": ""',
-      "    }",
-      "  ],",
-      '  "reviewNotes": [""]',
-      "}",
-      "Adjust only what the user's instructions require and preserve all other rows.",
-      "For UPI transactions, distinguish people from organizations whenever possible.",
-      "Use UPI Transfer for individuals without a clear business purpose and use a more specific business ledger when the counterparty appears to be an organization.",
-      "For IMPS and NEFT transactions, prefer the actual sender or receiver name as the ledger head whenever the narration clearly includes that name.",
-      "Always return debitAccount and creditAccount for each row.",
-      "Return JSON only.",
-    ].join("\n"),
-    contentBlocks: [
-      {
-        type: "text",
-        text: `Current bank statement JSON:\n${JSON.stringify(normalizedStatement, null, 2)}`,
-      },
-      {
-        type: "text",
-        text: `User instructions:\n${safeInstructions}`,
-      },
-    ],
-    maxTokens: 8192,
-  });
-
-  const revisedTransactions = applyLearnedMappings(normalizeTransactions(structured, bankLedgerName), {
-    clientId: context.clientId || statement?.tallyConfig?.clientId,
-    bankName: context.bankName || statement?.tallyConfig?.bankName,
-  });
+  const revisedTransactions = currentTransactions.map((row, index) =>
+    toStatementTransaction(row, classifications[index] || {}, bankLedgerName, clientId)
+  );
+  const summary = buildSummary(revisedTransactions);
 
   return {
-    confidence: normalizeConfidence(structured.confidence),
-    summary: buildSummary(structured, revisedTransactions),
+    ...statement,
+    confidence: statementConfidenceFromTransactions(revisedTransactions),
+    summary,
     transactions: revisedTransactions,
-    reviewNotes: ensureArray(structured.reviewNotes)
-      .map((note) => cleanString(note))
-      .filter(Boolean),
-    tallyConfig: {
-      ...normalizedStatement.tallyConfig,
-      ...(structured.tallyConfig || {}),
-      clientId: cleanString(context.clientId || normalizedStatement.tallyConfig.clientId),
-      bankName: cleanString(context.bankName || normalizedStatement.tallyConfig.bankName),
-    },
+    reviewNotes: [],
     learningSummary: getLearningSummary({
-      clientId: context.clientId || normalizedStatement.tallyConfig.clientId,
-      bankName: context.bankName || normalizedStatement.tallyConfig.bankName,
+      clientId,
+      bankName: cleanString(context.bankName || statement?.tallyConfig?.bankName),
     }),
   };
 }

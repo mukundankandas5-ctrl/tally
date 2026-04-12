@@ -33,6 +33,10 @@ async function postForm(path, formData) {
   });
 }
 
+async function apiRequest(path, options = {}) {
+  return fetchJson(path, options);
+}
+
 async function postJson(path, payload) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: "POST",
@@ -85,6 +89,14 @@ export async function completeDocumentRequest(id) {
 
 export async function fetchAuthUsers() {
   return fetchJson("/api/auth/users");
+}
+
+export async function updateOnboardingStatus(userId, status) {
+  return fetchJson("/api/auth/onboarding", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, status }),
+  });
 }
 
 export async function loginUser(email, password) {
@@ -284,6 +296,14 @@ export async function learnBankStatement(statement, userInstructions = "") {
   });
 }
 
+export async function correctTransaction(transactionId, payload) {
+  return fetchJson(`/api/transactions/${transactionId}/correct`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function reviseInvoice(invoice, userInstructions) {
   return fetchJson("/api/invoices/revise", {
     method: "POST",
@@ -299,4 +319,3 @@ export async function reviseRecommendations(payload, userInstructions, context =
     body: JSON.stringify({ payload, userInstructions, context }),
   });
 }
-
