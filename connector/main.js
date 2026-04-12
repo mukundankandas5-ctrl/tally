@@ -49,6 +49,8 @@ let tallyCompany = "";
 let lastHeartbeatAt = 0;
 let lastConnectorMessage = "Starting connector";
 let hasShownTrayNotice = false;
+let isQuitting = false;
+let socketConnectTimer = null;
 
 function getDeviceId() {
   let deviceId = store.get("deviceId");
@@ -406,6 +408,20 @@ function stopHeartbeatLoop() {
   }
 }
 
+function clearReconnectTimer() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function clearSocketConnectTimer() {
+  if (socketConnectTimer) {
+    clearTimeout(socketConnectTimer);
+    socketConnectTimer = null;
+  }
+}
+
 function startHeartbeatLoop() {
   stopHeartbeatLoop();
   sendHeartbeat();
@@ -413,34 +429,56 @@ function startHeartbeatLoop() {
 }
 
 function scheduleReconnect() {
-  clearTimeout(reconnectTimer);
+  if (isQuitting) return;
+  clearReconnectTimer();
   reconnectTimer = setTimeout(function() {
+    reconnectTimer = null;
     connectSocket();
   }, reconnectDelay);
   reconnectDelay = Math.min(reconnectDelay * 2, 30000);
 }
 
 function connectSocket() {
+  if (isQuitting) return;
   var backendUrl = getBackendUrl();
   var deviceToken = store.get("deviceToken");
 
   if (!backendUrl || !deviceToken) {
+    stopHeartbeatLoop();
+    clearReconnectTimer();
+    clearSocketConnectTimer();
     connectorConnected = false;
+    lastConnectorMessage = "Waiting for pairing details";
     updateTray();
     openSettingsWindow("setup");
     return;
   }
 
+  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
   lastConnectorMessage = "Connecting to backend";
   var wsUrl = getWsUrl();
-  socket = new WebSocket(wsUrl);
+  var nextSocket = new WebSocket(wsUrl);
+  socket = nextSocket;
+  clearSocketConnectTimer();
+  socketConnectTimer = setTimeout(function() {
+    if (nextSocket.readyState === WebSocket.CONNECTING) {
+      lastConnectorMessage = "Connection timeout. Retrying...";
+      try {
+        nextSocket.terminate();
+      } catch (error) {}
+    }
+  }, 12000);
 
-  socket.on("open", function() {
+  nextSocket.on("open", function() {
+    clearSocketConnectTimer();
     connectorConnected = true;
-    clearTimeout(reconnectTimer);
+    clearReconnectTimer();
     reconnectDelay = 2000;
     lastConnectorMessage = "Connected to backend";
-    socket.send(
+    nextSocket.send(
       JSON.stringify({
         type: "auth",
         deviceId: getDeviceId(),
@@ -451,9 +489,14 @@ function connectSocket() {
     updateTray();
   });
 
-  socket.on("message", async function(rawMessage) {
+  nextSocket.on("message", async function(rawMessage) {
     try {
       var message = JSON.parse(String(rawMessage));
+      if (message.type === "auth_ok") {
+        lastConnectorMessage = "Connector authenticated";
+        updateTray();
+        return;
+      }
       if (message.type === "push_entry") {
         await pushXmlToLocalTally(message.entryId, message.xml);
       }
@@ -462,26 +505,52 @@ function connectSocket() {
     }
   });
 
-  socket.on("close", function() {
+  nextSocket.on("close", function(code) {
+    clearSocketConnectTimer();
+    if (socket === nextSocket) {
+      socket = null;
+    }
+    stopHeartbeatLoop();
     connectorConnected = false;
+    if (code === 4001) {
+      store.set("deviceToken", "");
+      store.set("pairedAt", "");
+      lastConnectorMessage = "Session expired. Please pair connector again.";
+      updateTray();
+      openSettingsWindow("setup");
+      return;
+    }
+
     lastConnectorMessage = "Disconnected from backend";
     updateTray();
     scheduleReconnect();
   });
 
-  socket.on("error", function() {
+  nextSocket.on("error", function() {
+    clearSocketConnectTimer();
+    stopHeartbeatLoop();
     connectorConnected = false;
     lastConnectorMessage = "Connection error";
     updateTray();
+    scheduleReconnect();
   });
 }
 
 function disconnectConnector(clearCredentials) {
   stopHeartbeatLoop();
+  clearReconnectTimer();
+  clearSocketConnectTimer();
   if (socket) {
-    socket.removeAllListeners();
-    socket.close();
+    const activeSocket = socket;
     socket = null;
+    activeSocket.removeAllListeners();
+    try {
+      if (activeSocket.readyState === WebSocket.CONNECTING) {
+        activeSocket.terminate();
+      } else {
+        activeSocket.close();
+      }
+    } catch (error) {}
   }
 
   connectorConnected = false;
@@ -579,7 +648,18 @@ if (gotTheLock) {
   });
 
   app.on("window-all-closed", function (event) {
-    event.preventDefault();
+    if (!isQuitting) {
+      event.preventDefault();
+    }
+  });
+
+  app.on("before-quit", function () {
+    isQuitting = true;
+    disconnectConnector(false);
+    if (tray) {
+      tray.destroy();
+      tray = null;
+    }
   });
 
   ipcMain.handle("connector:get-state", function () {

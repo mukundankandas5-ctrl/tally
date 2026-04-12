@@ -59,7 +59,50 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (client_id) REFERENCES clients(id)
   );
+
+  CREATE TABLE IF NOT EXISTS mapping_rules (
+    id TEXT PRIMARY KEY,
+    client_id TEXT,
+    condition_text TEXT NOT NULL,
+    ledger TEXT NOT NULL,
+    voucher_type TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS pending_push_queue (
+    id TEXT PRIMARY KEY,
+    client_id TEXT,
+    type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS activity_logs (
+    id TEXT PRIMARY KEY,
+    client_id TEXT,
+    message TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'info',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS sync_history (
+    id TEXT PRIMARY KEY,
+    client_id TEXT,
+    tally_company TEXT,
+    type TEXT NOT NULL,
+    entries_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'Success',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
+
+try {
+  db.exec("ALTER TABLE users ADD COLUMN onboarding_complete INTEGER NOT NULL DEFAULT 0;");
+} catch (e) {
+  // Column already exists
+}
+
 // One-time cleanup: purge previously seeded demo data from deployed databases
 const seedClientIds = ["aurora", "bluewave", "greenleaf"];
 const seedDocRequestIds = ["doc-aurora-q4-bank", "doc-bluewave-gst"];
@@ -80,6 +123,7 @@ function sanitizeUser(row) {
     name: row.name,
     email: row.email,
     role: row.role,
+    onboardingComplete: Boolean(row.onboarding_complete),
     createdAt: row.created_at,
   };
 }
@@ -224,6 +268,54 @@ function updateDocumentRequestStatus(id, status) {
   db.prepare("UPDATE document_requests SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(status, id);
 }
 
+function updateOnboardingStatus(userId, status) {
+  db.prepare("UPDATE users SET onboarding_complete = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(
+    status ? 1 : 0,
+    userId
+  );
+  return sanitizeUser(db.prepare("SELECT * FROM users WHERE id = ?").get(userId));
+}
+
+function logActivity(message, type = 'info', clientId = null) {
+  const id = `act-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  db.prepare(
+    "INSERT INTO activity_logs (id, client_id, message, type) VALUES (?, ?, ?, ?)"
+  ).run(id, clientId, message, type);
+}
+
+function getRecentActivities(limit = 10) {
+  return db.prepare("SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT ?").all(limit).map(row => ({
+    id: row.id,
+    clientId: row.client_id,
+    message: row.message,
+    type: row.type,
+    createdAt: row.created_at
+  }));
+}
+
+function recordSync(type, entriesCount, status = 'Success', tallyCompany = '', clientId = null) {
+  const id = `sync-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  db.prepare(
+    "INSERT INTO sync_history (id, client_id, tally_company, type, entries_count, status) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(id, clientId, tallyCompany, type, entriesCount, status);
+  
+  if (status === 'Success') {
+    logActivity(`Pushed ${entriesCount} ${type} entries to Tally`, 'success', clientId);
+  }
+}
+
+function getSyncHistory(limit = 50) {
+  return db.prepare("SELECT * FROM sync_history ORDER BY created_at DESC LIMIT ?").all(limit).map(row => ({
+    id: row.id,
+    clientId: row.client_id,
+    tallyCompany: row.tally_company,
+    type: row.type,
+    entriesCount: row.entries_count,
+    status: row.status,
+    createdAt: row.created_at
+  }));
+}
+
 module.exports = {
   createClient,
   createDocumentRequest,
@@ -240,4 +332,9 @@ module.exports = {
   touchClientActivity,
   updateDocumentRequestStatus,
   verifyUser,
+  updateOnboardingStatus,
+  logActivity,
+  getRecentActivities,
+  recordSync,
+  getSyncHistory,
 };

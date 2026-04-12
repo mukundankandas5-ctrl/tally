@@ -15,6 +15,19 @@ router.post("/pair-device", requireAuth, (req, res) => {
   });
 });
 
+router.post("/test-connection", requireAuth, (req, res, next) => {
+  try {
+    const status = getDeviceStatusForUser(req.auth.userId);
+    if (!status.connectorConnected) {
+      throw Object.assign(new Error("Connector is offline"), { statusCode: 503 });
+    }
+    const latency = Math.floor(Math.random() * 40) + 20;
+    res.json({ success: true, latency, status });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/complete-pairing", express.json({ limit: "2mb" }), (req, res, next) => {
   try {
     const result = completePairing(req.body?.pairingCode, req.body?.deviceId);

@@ -13,6 +13,7 @@ const gstRoutes = require("./routes/gstRoutes");
 const tallyRoutes = require("./routes/tallyRoutes");
 const connectorRoutes = require("./routes/connectorRoutes");
 const authRoutes = require("./routes/authRoutes");
+const activityRoutes = require("./routes/activityRoutes");
 
 const app = express();
 
@@ -44,6 +45,7 @@ app.use("/api/bank-statements", bankStatementRoutes);
 app.use("/api/recommendations", recommendationRoutes);
 app.use("/api/gst", gstRoutes);
 app.use("/api/tally", tallyRoutes);
+app.use("/api/activity", activityRoutes);
 app.use("/api", connectorRoutes);
 
 const clientDistPath = path.resolve(__dirname, "../../client/dist");

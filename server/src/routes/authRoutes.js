@@ -8,6 +8,7 @@ const {
   listUsers,
   resetPassword,
   verifyUser,
+  updateOnboardingStatus,
 } = require("../db/database");
 
 const router = express.Router();
@@ -147,6 +148,22 @@ router.get("/users", (req, res, next) => {
   try {
     res.json({
       users: listUsers(),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/onboarding", express.json({ limit: "1mb" }), (req, res, next) => {
+  try {
+    const { userId, status } = req.body;
+    if (!userId) {
+      throw new AppError("User ID is required.", 400);
+    }
+    const user = updateOnboardingStatus(userId, status);
+    res.json({
+      message: "Onboarding status updated.",
+      user,
     });
   } catch (error) {
     next(error);

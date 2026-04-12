@@ -24,6 +24,7 @@ function registerDevice({ ws, userId, deviceId }) {
   });
 
   ws.__deviceId = deviceId;
+  ws.__authenticated = true;
 }
 
 function resolvePendingPush(entryId, payload) {
@@ -72,7 +73,7 @@ function initializeConnectorWebSocket(server) {
       if (message.type === "auth") {
         const record = validateDeviceToken(message.deviceId, message.token);
         if (!record) {
-          ws.close();
+          ws.close(4001, "AUTH_FAILED");
           return;
         }
 
@@ -82,6 +83,18 @@ function initializeConnectorWebSocket(server) {
           deviceId: record.deviceId,
         });
 
+        ws.send(
+          JSON.stringify({
+            type: "auth_ok",
+            deviceId: record.deviceId,
+          })
+        );
+
+        return;
+      }
+
+      if (!ws.__authenticated) {
+        ws.close(4001, "AUTH_REQUIRED");
         return;
       }
 
