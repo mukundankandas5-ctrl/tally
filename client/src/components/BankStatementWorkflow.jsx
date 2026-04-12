@@ -344,7 +344,7 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
                         </td>
                           <td className="table-cell">
                             <textarea
-                              className="input-base min-w-[220px]"
+                            className="input-base min-w-[180px]"
                               rows="2"
                               value={transaction.narration}
                               onChange={(event) => updateTransaction(transaction.id, "narration", event.target.value)}
@@ -352,7 +352,7 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
                           </td>
                           <td className="table-cell">
                             <input
-                              className="input-base min-w-[130px]"
+                              className="input-base min-w-[110px]"
                               type="number"
                               step="0.01"
                               value={transaction.debit}
@@ -361,7 +361,7 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
                           </td>
                           <td className="table-cell">
                             <input
-                              className="input-base min-w-[130px]"
+                              className="input-base min-w-[110px]"
                               type="number"
                               step="0.01"
                               value={transaction.credit}
@@ -370,7 +370,7 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
                           </td>
                           <td className="table-cell">
                             <input
-                              className="input-base min-w-[130px]"
+                              className="input-base min-w-[110px]"
                               type="number"
                               step="0.01"
                               value={transaction.balance}
@@ -379,7 +379,7 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
                           </td>
                           <td className="table-cell">
                             <select
-                              className="input-base min-w-[200px]"
+                              className="input-base min-w-[160px]"
                             value={transaction.ledgerHead}
                             onChange={(event) => updateTransaction(transaction.id, "ledgerHead", event.target.value)}
                           >
@@ -393,7 +393,7 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
                           </td>
                           <td className="table-cell">
                             <select
-                              className="input-base min-w-[180px]"
+                              className="input-base min-w-[150px]"
                               value={transaction.debitAccount || ""}
                               onChange={(event) => updateTransaction(transaction.id, "debitAccount", event.target.value)}
                             >
@@ -407,7 +407,7 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
                           </td>
                           <td className="table-cell">
                             <select
-                              className="input-base min-w-[180px]"
+                              className="input-base min-w-[150px]"
                               value={transaction.creditAccount || ""}
                               onChange={(event) => updateTransaction(transaction.id, "creditAccount", event.target.value)}
                             >

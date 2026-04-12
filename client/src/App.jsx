@@ -647,6 +647,7 @@ function EditableCellSelect({ value, onChange, options }) {
       onChange={(event) => onChange(event.target.value)}
       className="h-8 w-full rounded-md border border-transparent bg-transparent px-2 text-sm text-[#111827] outline-none hover:border-[#D1D5DB] focus:border-[#C4B5FD] focus:ring-2 focus:ring-[#F5F3FF]"
     >
+      <option value="">Select...</option>
       {options.map((option) => (
         <option key={option} value={option}>
           {option}
@@ -949,7 +950,7 @@ function TableRow({
   const amountEditingEnabled = isSelected || workflowStatus !== "resolved";
   const isBankRow = rowType === "bank";
   const gridTemplateColumns = isBankRow
-    ? "40px 125px 100px minmax(220px,1fr) 120px 120px 120px 175px 175px 150px"
+    ? "40px 120px 92px minmax(180px,0.8fr) 104px 104px 104px 150px 160px 140px"
     : "40px 100px 100px minmax(280px,1fr) 120px 120px 120px 200px 150px";
 
   return (
@@ -1073,7 +1074,7 @@ function EntryTable({
   const isBankRowType = rowType === "bank";
   const tableHeight = Math.min(visibleRows.length, 8) * ROW_HEIGHT + 44;
   const gridTemplateColumns = isBankRowType
-    ? "40px 125px 100px minmax(220px,1fr) 120px 120px 120px 175px 175px 150px"
+    ? "40px 120px 92px minmax(180px,0.8fr) 104px 104px 104px 150px 160px 140px"
     : "40px 100px 100px minmax(280px,1fr) 120px 120px 120px 200px 150px";
 
   const renderHeader = (
@@ -1222,7 +1223,7 @@ function EntryTable({
 
         <div className="mt-4 overflow-hidden rounded-xl border border-[#E5E7EB]">
           <div className="overflow-x-auto">
-            <div className={cn(isBankRowType ? "min-w-[1350px]" : "min-w-[1070px]")}>
+            <div className={cn(isBankRowType ? "min-w-[1220px]" : "min-w-[1070px]")}>
               {renderHeader}
               {visibleRows.length > 100 ? (
                 <List
@@ -2223,6 +2224,16 @@ export default function App() {
     });
   }
 
+  async function handleTestAi() {
+    const hasKey = Boolean(settingsForm.anthropicApiKey || settingsForm.showApiKey);
+    addToast(
+      hasKey
+        ? "AI is configured on the server. Upload a bank statement to verify live classification."
+        : "Anthropic API key is managed on the server. Add it in Render, then upload a statement to test AI.",
+      "info"
+    );
+  }
+
   async function handleReconcile(gstr2bFile, purchaseRegisterFile) {
     await withBusy("gst-reconcile", async () => {
       const payload = await reconcileGst(gstr2bFile, purchaseRegisterFile);
@@ -2822,7 +2833,9 @@ export default function App() {
                 testConnectionResult={testConnectionResult}
                 onTestConnection={handleTestConnection}
                 onConnectTally={handlePairing}
+                onTestAI={handleTestAi}
                 tallyStatus={tallyStatus}
+                busy={busy}
               />
             ) : null}
           </main>
@@ -3112,8 +3125,7 @@ function ClientsPage({ clients, documentRequests, bankOptions, clientForm, setCl
   );
 }
 
-function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, onConnectTally, tallyStatus }) {
-  const connectorDownloadUrl = "https://github.com/mukundankandas5-ctrl/tally/releases/latest/download/Tally.AI.Connector.Setup.1.0.0.exe";
+function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, onConnectTally, onTestAI, tallyStatus, busy }) {
   const connectorReleasesUrl = "https://github.com/mukundankandas5-ctrl/tally/releases/latest";
 
   return (
@@ -3133,13 +3145,11 @@ function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, o
 
               <div className="mt-5 flex flex-wrap items-center gap-3">
                 <a
-                  href={connectorDownloadUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  href="/api/connector-download"
                   className="inline-flex items-center gap-2 rounded-lg bg-[#7C3AED] px-5 py-3 text-sm font-semibold text-white shadow-[0_2px_8px_rgba(124,58,237,0.35)] transition hover:bg-[#6D28D9] hover:shadow-[0_4px_16px_rgba(124,58,237,0.4)]"
                 >
                   <Download className="h-4 w-4" />
-                  Download for Windows
+                  Download latest .exe
                 </a>
                 <a
                   href={connectorReleasesUrl}
@@ -3151,7 +3161,7 @@ function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, o
                 </a>
               </div>
               <p className="mt-3 text-xs text-[#9CA3AF]">
-                Version 1.0.0 · Windows 8.1 / 10 / 11 · 32-bit & 64-bit · Requires TallyPrime running on the same PC
+                Latest Windows build · Windows 8.1 / 10 / 11 · 32-bit & 64-bit · Requires TallyPrime running on the same PC
               </p>
             </div>
 
@@ -3185,7 +3195,7 @@ function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, o
         </div>
 
         <div className="mt-5 flex flex-wrap items-center gap-4">
-          <Button variant="primary" onClick={onConnectTally}>
+          <Button variant="primary" onClick={onConnectTally} disabled={busy === "pairing"}>
             <Send className="h-4 w-4" />
             Generate Pairing Code
           </Button>
@@ -3217,7 +3227,7 @@ function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, o
           </Field>
         </div>
         <div className="mt-4 flex items-center gap-3">
-          <Button variant="outlinePurple" onClick={onTestConnection}>
+          <Button variant="outlinePurple" onClick={onTestConnection} disabled={busy === "test-connection"}>
             {testConnectionResult === "Connected" ? <Check className="h-4 w-4" /> : null}
             Test Connection
           </Button>
@@ -3236,13 +3246,15 @@ function SettingsPage({ form, setForm, testConnectionResult, onTestConnection, o
                 className="settings-input flex-1"
                 placeholder="Server-managed key"
               />
-              <Button variant="ghost" onClick={() => setForm((current) => ({ ...current, showApiKey: !current.showApiKey }))}>
+            <Button variant="ghost" onClick={() => setForm((current) => ({ ...current, showApiKey: !current.showApiKey }))}>
                 {form.showApiKey ? "Hide" : "Show"}
               </Button>
             </div>
           </Field>
           <div className="md:self-end">
-            <Button variant="outlinePurple">Test AI</Button>
+            <Button variant="outlinePurple" onClick={onTestAI}>
+              Test AI
+            </Button>
           </div>
         </div>
       </SettingsCard>

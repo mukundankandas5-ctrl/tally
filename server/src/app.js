@@ -30,13 +30,7 @@ app.get("/api/health", (req, res) => {
 });
 
 app.get("/api/connector-download", (req, res) => {
-  res.json({
-    downloadUrl: "https://github.com/mukundankandas5-ctrl/tally/releases/latest",
-    directDownloadUrl: "https://github.com/mukundankandas5-ctrl/tally/releases/latest/download/Tally.AI.Connector.Setup.1.0.0.exe",
-    version: "1.0.0",
-    platform: "Windows",
-    fileName: "Tally AI Connector Setup 1.0.0.exe",
-  });
+  res.redirect(302, "https://github.com/mukundankandas5-ctrl/tally/releases/latest/download/Tally.AI.Connector.Setup.1.0.0.exe");
 });
 
 app.use("/api/auth", authRoutes);
