@@ -7,7 +7,7 @@ export default function StatCard({ label, value, tone = "default", caption }) {
   };
 
   return (
-    <div className={`fade-in-scale rounded-24 border bg-gradient-to-br p-6 backdrop-blur-lg shadow-lg hover:shadow-xl transition-smooth hover:scale-105 cursor-default ${toneClasses[tone] || toneClasses.default}`}>
+    <div className={`fade-in-scale rounded-3xl border bg-gradient-to-br p-6 backdrop-blur-lg shadow-lg hover:shadow-xl transition-smooth hover:scale-105 cursor-default ${toneClasses[tone] || toneClasses.default}`}>
       <div className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500 opacity-80">{label}</div>
       <div className="mt-4 text-3xl font-bold text-slate-900 tracking-tight">{value}</div>
       {caption ? (
