@@ -37,9 +37,12 @@ import {
   fetchActivity,
   fetchClients,
   fetchDocumentRequests,
+  fetchAuthUsers,
   fetchLedgers,
   fetchSyncHistory,
   fetchTallyStatus,
+  getMappingRules,
+  saveBankStatementAnalysis,
   learnBankStatement,
   loginUser,
   pushBankStatementToTally,
@@ -61,8 +64,15 @@ import {
 } from "./utils/api";
 import { isSupabaseEnabled } from "./utils/authClient";
 import { formatCurrency, formatDate, formatNumber } from "./utils/formatters";
+import AnalyticsDashboard from "./components/AnalyticsDashboard";
+import AccountMapperDashboard from "./components/AccountMapperDashboard";
+import DuplicateDetectionPanel from "./components/DuplicateDetectionPanel";
 import { EmptyState } from "./components/EmptyState";
 import { OnboardingWizard } from "./components/OnboardingWizard";
+import ExportValidationPanel from "./components/ExportValidationPanel";
+import ReconciliationTracker from "./components/ReconciliationTracker";
+import RuleDashboard from "./components/RuleDashboard";
+import UserAssignmentPanel from "./components/UserAssignmentPanel";
 
 const SIDEBAR_WIDTH = 220;
 const SIDEBAR_COLLAPSED_WIDTH = 64;
@@ -398,7 +408,20 @@ function getVisibleRows(rows, filters) {
       row.voucherType.toLowerCase().includes(query);
     const matchesStatus = filters.status === "all" || row.status === filters.status;
     const matchesVoucher = filters.voucherType === "all" || row.voucherType === filters.voucherType;
-    return matchesQuery && matchesStatus && matchesVoucher;
+    const confidenceBucket =
+      Number(row.confidenceScore || normalizeConfidenceScore(row.confidence, row.confidence)) >= 0.85
+        ? "high"
+        : Number(row.confidenceScore || normalizeConfidenceScore(row.confidence, row.confidence)) >= 0.6
+          ? "medium"
+          : "low";
+    const matchesConfidence = !filters.confidence || filters.confidence === "all" || confidenceBucket === filters.confidence;
+    const matchesCategory = !filters.category || filters.category === "all" || (row.category || "Uncategorized") === filters.category;
+    const matchesAmountSide =
+      !filters.amountSide ||
+      filters.amountSide === "all" ||
+      (filters.amountSide === "debit" && Number(row.debit || 0) > 0) ||
+      (filters.amountSide === "credit" && Number(row.credit || 0) > 0);
+    return matchesQuery && matchesStatus && matchesVoucher && matchesConfidence && matchesCategory && matchesAmountSide;
   });
 }
 
@@ -1239,6 +1262,42 @@ function EntryTable({
                 ...voucherOptions.map((option) => ({ value: option, label: option })),
               ]}
             />
+            {isBankRowType ? (
+              <FilterSelect
+                label="Confidence"
+                value={filters.confidence || "all"}
+                onChange={(value) => onFiltersChange({ ...filters, confidence: value })}
+                options={[
+                  { value: "all", label: "All" },
+                  { value: "high", label: "High" },
+                  { value: "medium", label: "Medium" },
+                  { value: "low", label: "Low" },
+                ]}
+              />
+            ) : null}
+            {isBankRowType ? (
+              <FilterSelect
+                label="Amount"
+                value={filters.amountSide || "all"}
+                onChange={(value) => onFiltersChange({ ...filters, amountSide: value })}
+                options={[
+                  { value: "all", label: "All" },
+                  { value: "debit", label: "Debit" },
+                  { value: "credit", label: "Credit" },
+                ]}
+              />
+            ) : null}
+            {isBankRowType ? (
+              <FilterSelect
+                label="Category"
+                value={filters.category || "all"}
+                onChange={(value) => onFiltersChange({ ...filters, category: value })}
+                options={[
+                  { value: "all", label: "All" },
+                  ...Array.from(new Set(rows.map((row) => row.category).filter(Boolean))).sort().map((option) => ({ value: option, label: option })),
+                ]}
+              />
+            ) : null}
           </div>
           <div className="flex items-center gap-3">
             <Button variant="ghost" onClick={onExport}>
@@ -1486,10 +1545,14 @@ export default function App() {
 
   const [bankStatement, setBankStatement] = useState(createEmptyBankStatement());
   const [bankRows, setBankRows] = useState(normalizeBankRows(createEmptyBankStatement()));
-  const [bankFilters, setBankFilters] = useState({ search: "", status: "all", voucherType: "all" });
+  const [bankFilters, setBankFilters] = useState({ search: "", status: "all", voucherType: "all", confidence: "all", category: "all", amountSide: "all" });
   const [bankSelected, setBankSelected] = useState([]);
   const [bankHint, setBankHint] = useState("");
   const [bulkBankJobs, setBulkBankJobs] = useState([]);
+  const [bankAnalysisId, setBankAnalysisId] = useState("");
+  const [authUsers, setAuthUsers] = useState([]);
+  const [mappingRules, setMappingRules] = useState([]);
+  const [validationSnapshot, setValidationSnapshot] = useState(null);
   const [bankProcessingConfig, setBankProcessingConfig] = useState({
     clientId: "",
     companyName: "",
@@ -1575,11 +1638,12 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([fetchLedgers(), fetchClients(), fetchTallyStatus(), fetchDocumentRequests(), fetchActivity(), fetchSyncHistory()])
-      .then(([ledgerPayload, clientPayload, tallyPayload, requestPayload, activityPayload, syncPayload]) => {
+    Promise.all([fetchLedgers(), fetchClients(), fetchTallyStatus(), fetchDocumentRequests(), fetchActivity(), fetchSyncHistory(), fetchAuthUsers()])
+      .then(([ledgerPayload, clientPayload, tallyPayload, requestPayload, activityPayload, syncPayload, usersPayload]) => {
         if (!active) return;
         setLedgerHeads(ledgerPayload.ledgerHeads || []);
         const nextClients = clientPayload.clients || [];
+        setAuthUsers(usersPayload.users || []);
         setClients(nextClients);
         setDocumentRequests(requestPayload.requests || []);
         setActivity(activityPayload || []);
@@ -1612,6 +1676,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!bankProcessingConfig.clientId) return;
+    getMappingRules(bankProcessingConfig.clientId)
+      .then((payload) => setMappingRules(payload.rules || []))
+      .catch(() => {});
+  }, [bankProcessingConfig.clientId]);
+
+  useEffect(() => {
     if (!activeClient) return;
     setBankProcessingConfig((current) => ({
       ...current,
@@ -1624,6 +1695,14 @@ export default function App() {
       clientId: current.clientId || activeClient.id,
     }));
   }, [activeClient]);
+
+  useEffect(() => {
+    if (!bankAnalysisId || !bankRows.length) return;
+    const timer = window.setTimeout(() => {
+      persistBankAnalysis().catch(() => {});
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [bankAnalysisId, bankRows, bankProcessingConfig.companyName, bankProcessingConfig.bankLedgerName, bankProcessingConfig.intervalStart, bankProcessingConfig.intervalEnd]);
 
   function addToast(message, tone = "info", duration = 2400) {
     const id = createId();
@@ -1670,6 +1749,54 @@ export default function App() {
     } finally {
       setBusy("");
     }
+  }
+
+  function buildCurrentBankStatement() {
+    return {
+      ...bankStatement,
+      originalFileName: bankStatement.originalFileName || `${bankProcessingConfig.bankName || "bank"}-statement.pdf`,
+      summary: {
+        ...bankStatement.summary,
+        periodStart: bankProcessingConfig.intervalStart || bankStatement.summary?.periodStart,
+        periodEnd: bankProcessingConfig.intervalEnd || bankStatement.summary?.periodEnd,
+        totalDebits: bankRows.reduce((sum, row) => sum + Number(row.debit || 0), 0),
+        totalCredits: bankRows.reduce((sum, row) => sum + Number(row.credit || 0), 0),
+        transactionCount: bankRows.length,
+        reviewCount: bankRows.filter((row) => row.status !== "resolved").length,
+      },
+      tallyConfig: {
+        ...bankStatement.tallyConfig,
+        companyName: bankProcessingConfig.companyName,
+        clientId: bankProcessingConfig.clientId,
+        bankName: bankProcessingConfig.bankName,
+        bankLedgerName: bankProcessingConfig.bankLedgerName,
+      },
+      transactions: bankRows.map((row) => ({
+        ...(row.original || {}),
+        id: row.id,
+        narration: row.particulars,
+        debit: row.debit,
+        credit: row.credit,
+        amount: row.amount,
+        category: row.category,
+        ledgerHead: row.ledger || row.autoLedger,
+        ledger: row.ledger || row.autoLedger,
+        voucherType: row.voucherType,
+        confidence: row.confidenceScore,
+        needsReview: row.status !== "resolved",
+        status: row.classificationStatus || row.status,
+        reasoning: row.reasoning || "",
+        upiVpa: row.upiVpa || "",
+        debitAccount: row.debit > 0 ? (row.ledger || row.autoLedger) : bankProcessingConfig.bankLedgerName,
+        creditAccount: row.credit > 0 ? (row.ledger || row.autoLedger) : bankProcessingConfig.bankLedgerName,
+      })),
+    };
+  }
+
+  async function persistBankAnalysis(nextStatement = null) {
+    const payload = await saveBankStatementAnalysis(nextStatement || buildCurrentBankStatement(), bankAnalysisId || null);
+    setBankAnalysisId(payload.id);
+    return payload.id;
   }
 
   function toggleRow(selected, setSelected, id) {
@@ -1839,8 +1966,21 @@ export default function App() {
   async function handleBankUpload(file) {
     await withBusy("bank-upload", async () => {
       const payload = await uploadBankStatement(file, bankProcessingConfig);
+      payload.originalFileName = file.name;
       setBankStatement(payload);
       setBankRows(normalizeBankRows(payload));
+      const saved = await saveBankStatementAnalysis({
+        ...payload,
+        originalFileName: file.name,
+        tallyConfig: {
+          ...payload.tallyConfig,
+          companyName: bankProcessingConfig.companyName,
+          clientId: bankProcessingConfig.clientId,
+          bankName: bankProcessingConfig.bankName,
+          bankLedgerName: bankProcessingConfig.bankLedgerName,
+        },
+      });
+      setBankAnalysisId(saved.id);
       setBankProcessingConfig((current) => ({
         ...current,
         bankLedgerName: payload.tallyConfig?.bankLedgerName || current.bankLedgerName,
@@ -1858,8 +1998,11 @@ export default function App() {
       setBulkBankJobs(payload.jobs || []);
       const firstSuccess = (payload.jobs || []).find((job) => job.status === "processed");
       if (firstSuccess?.statement) {
-        setBankStatement(firstSuccess.statement);
-        setBankRows(normalizeBankRows(firstSuccess.statement));
+        const prepared = { ...firstSuccess.statement, originalFileName: firstSuccess.fileName };
+        setBankStatement(prepared);
+        setBankRows(normalizeBankRows(prepared));
+        const saved = await saveBankStatementAnalysis(prepared);
+        setBankAnalysisId(saved.id);
       }
       addActivity(`Processed ${payload.summary?.processedFiles || 0} bulk bank files`, "Resolved");
       addToast(`Bulk run completed for ${payload.summary?.totalFiles || files.length} files.`, "success");
@@ -1917,6 +2060,10 @@ export default function App() {
       setBankStatement(revised);
       const nextRows = normalizeBankRows(revised);
       setBankRows(nextRows);
+      await persistBankAnalysis({
+        ...revised,
+        originalFileName: bankStatement.originalFileName,
+      });
       withFlash(nextRows.map((row) => row.id));
       addToast("Updated classifications using your instruction.", "success");
     });
@@ -1959,6 +2106,12 @@ export default function App() {
         })),
       };
       const payload = await learnBankStatement(statementPayload, bankHint);
+      await persistBankAnalysis(statementPayload);
+      if (bankProcessingConfig.clientId) {
+        getMappingRules(bankProcessingConfig.clientId)
+          .then((result) => setMappingRules(result.rules || []))
+          .catch(() => {});
+      }
       addToast(payload.message || "Learned current review.", "success");
     });
   }
@@ -1988,6 +2141,14 @@ export default function App() {
             : item
         )
       );
+      if (bankAnalysisId) {
+        persistBankAnalysis().catch(() => {});
+      }
+      if (bankProcessingConfig.clientId) {
+        getMappingRules(bankProcessingConfig.clientId)
+          .then((payload) => setMappingRules(payload.rules || []))
+          .catch(() => {});
+      }
       withFlash([row.id]);
       addToast("Saved correction and updated learned mapping rule.", "success");
     } catch (error) {
@@ -2715,10 +2876,17 @@ export default function App() {
                             key={job.id}
                             type="button"
                             className="w-full rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] p-3 text-left"
-                            onClick={() => {
+                            onClick={async () => {
                               if (job.statement) {
-                                setBankStatement(job.statement);
-                                setBankRows(normalizeBankRows(job.statement));
+                                const prepared = { ...job.statement, originalFileName: job.fileName };
+                                setBankStatement(prepared);
+                                setBankRows(normalizeBankRows(prepared));
+                                try {
+                                  const saved = await saveBankStatementAnalysis(prepared);
+                                  setBankAnalysisId(saved.id);
+                                } catch (error) {
+                                  addToast("Could not reopen this bulk analysis snapshot.", "error");
+                                }
                               }
                             }}
                           >
@@ -2815,6 +2983,77 @@ export default function App() {
                       flashRowIds={flashRowIds}
                       onCorrectTransaction={handleTransactionCorrection}
                     />
+
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <DuplicateDetectionPanel
+                        analysisId={bankAnalysisId}
+                        transactions={buildCurrentBankStatement().transactions}
+                        onDuplicateResolved={(duplicateId, resolution) => {
+                          if (resolution !== "merged") return;
+                          addToast("Duplicate pair marked for merge review.", "success");
+                        }}
+                      />
+                      <ExportValidationPanel
+                        analysisId={bankAnalysisId}
+                        transactions={buildCurrentBankStatement().transactions}
+                        config={{ ledgerHeads }}
+                        onValidationComplete={(result) => setValidationSnapshot(result)}
+                      />
+                      <RuleDashboard clientId={bankProcessingConfig.clientId} mappingRules={mappingRules} />
+                      <AccountMapperDashboard
+                        clientId={bankProcessingConfig.clientId}
+                        onMappingChange={() => {
+                          if (bankProcessingConfig.clientId) {
+                            getMappingRules(bankProcessingConfig.clientId)
+                              .then((payload) => setMappingRules(payload.rules || []))
+                              .catch(() => {});
+                          }
+                        }}
+                      />
+                      <AnalyticsDashboard
+                        clientId={bankProcessingConfig.clientId}
+                        analysisId={bankAnalysisId}
+                        statement={buildCurrentBankStatement()}
+                        dateRange={30}
+                      />
+                      <UserAssignmentPanel
+                        analysisId={bankAnalysisId}
+                        currentUser={authUser}
+                        onAssignmentChange={() => addToast("Team assignment updated.", "success")}
+                      />
+                    </div>
+
+                    <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+                      <ReconciliationTracker
+                        analysisId={bankAnalysisId}
+                        clientId={bankProcessingConfig.clientId}
+                        totalTransactions={bankRows.length}
+                        totalAmount={bankRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)}
+                      />
+                      <div className="glass-panel rounded-[28px] border border-white/70 p-5">
+                        <div className="text-lg font-semibold text-[#111827]">Review Operations Summary</div>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                          <div className="rounded-2xl border border-white/70 bg-white/45 p-4">
+                            <div className="text-xs uppercase tracking-[0.12em] text-[#6B7280]">Saved Analysis</div>
+                            <div className="mt-2 text-sm font-semibold text-[#111827]">{bankAnalysisId ? bankAnalysisId.slice(-12) : "Not saved yet"}</div>
+                          </div>
+                          <div className="rounded-2xl border border-white/70 bg-white/45 p-4">
+                            <div className="text-xs uppercase tracking-[0.12em] text-[#6B7280]">Validation</div>
+                            <div className="mt-2 text-sm font-semibold text-[#111827]">
+                              {validationSnapshot ? (validationSnapshot.canExport ? "Ready to export" : "Needs fixes") : "Not run yet"}
+                            </div>
+                          </div>
+                          <div className="rounded-2xl border border-white/70 bg-white/45 p-4">
+                            <div className="text-xs uppercase tracking-[0.12em] text-[#6B7280]">Advanced Filters</div>
+                            <div className="mt-2 text-sm font-semibold text-[#111827]">Confidence, category, voucher, debit/credit</div>
+                          </div>
+                          <div className="rounded-2xl border border-white/70 bg-white/45 p-4">
+                            <div className="text-xs uppercase tracking-[0.12em] text-[#6B7280]">Team Members</div>
+                            <div className="mt-2 text-sm font-semibold text-[#111827]">{authUsers.length || 0} available users</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

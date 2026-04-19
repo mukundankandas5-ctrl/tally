@@ -139,6 +139,120 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_tally_ledgers_user_company ON tally_ledgers(user_id, company_name);
+
+  CREATE TABLE IF NOT EXISTS bank_statement_analyses (
+    id TEXT PRIMARY KEY,
+    client_id TEXT,
+    file_name TEXT NOT NULL,
+    original_file_name TEXT NOT NULL,
+    statement_data TEXT NOT NULL,
+    summary TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS statement_change_history (
+    id TEXT PRIMARY KEY,
+    analysis_id TEXT NOT NULL,
+    change_type TEXT NOT NULL,
+    previous_state TEXT,
+    new_state TEXT,
+    change_summary TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (analysis_id) REFERENCES bank_statement_analyses(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_bank_statement_analyses_client ON bank_statement_analyses(client_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_statement_change_history_analysis ON statement_change_history(analysis_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS duplicate_transactions (
+    id TEXT PRIMARY KEY,
+    analysis_id TEXT NOT NULL,
+    transaction_id_1 TEXT NOT NULL,
+    transaction_id_2 TEXT NOT NULL,
+    match_score REAL NOT NULL,
+    match_reason TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (analysis_id) REFERENCES bank_statement_analyses(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS account_mappings (
+    id TEXT PRIMARY KEY,
+    client_id TEXT,
+    debit_account TEXT NOT NULL,
+    credit_account TEXT NOT NULL,
+    frequency INTEGER DEFAULT 1,
+    confidence_score REAL DEFAULT 0.8,
+    is_active INTEGER DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(client_id, debit_account, credit_account)
+  );
+
+  CREATE TABLE IF NOT EXISTS export_validations (
+    id TEXT PRIMARY KEY,
+    analysis_id TEXT NOT NULL,
+    validation_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    issue_count INTEGER DEFAULT 0,
+    issues TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (analysis_id) REFERENCES bank_statement_analyses(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS processing_analytics (
+    id TEXT PRIMARY KEY,
+    client_id TEXT,
+    analysis_id TEXT,
+    metric_type TEXT NOT NULL,
+    metric_value REAL,
+    metric_label TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS tally_reconciliation (
+    id TEXT PRIMARY KEY,
+    analysis_id TEXT,
+    client_id TEXT,
+    push_date TEXT NOT NULL,
+    xml_hash TEXT,
+    expected_count INTEGER,
+    received_count INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending',
+    matched_entries INTEGER DEFAULT 0,
+    mismatches TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS user_assignments (
+    id TEXT PRIMARY KEY,
+    analysis_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    assigned_by TEXT,
+    status TEXT DEFAULT 'assigned',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (analysis_id) REFERENCES bank_statement_analyses(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS audit_logs (
+    id TEXT PRIMARY KEY,
+    analysis_id TEXT,
+    user_id TEXT,
+    action TEXT NOT NULL,
+    changes TEXT,
+    ip_address TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_duplicate_transactions_analysis ON duplicate_transactions(analysis_id);
+  CREATE INDEX IF NOT EXISTS idx_account_mappings_client ON account_mappings(client_id, is_active);
+  CREATE INDEX IF NOT EXISTS idx_export_validations_analysis ON export_validations(analysis_id);
+  CREATE INDEX IF NOT EXISTS idx_processing_analytics_client ON processing_analytics(client_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_tally_reconciliation_analysis ON tally_reconciliation(analysis_id);
+  CREATE INDEX IF NOT EXISTS idx_user_assignments_analysis ON user_assignments(analysis_id);
+  CREATE INDEX IF NOT EXISTS idx_audit_logs_analysis ON audit_logs(analysis_id, created_at DESC);
 `);
 
 try {
@@ -573,6 +687,304 @@ function getTallyLedgers(userId, companyName) {
     .all(userId, companyName);
 }
 
+function saveBankStatementAnalysis({ id, clientId, fileName, originalFileName, statementData, summary }) {
+  const existing = db.prepare("SELECT * FROM bank_statement_analyses WHERE id = ?").get(id);
+  
+  if (existing) {
+    db.prepare(
+      `UPDATE bank_statement_analyses 
+       SET statement_data = ?, summary = ?, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = ?`
+    ).run(JSON.stringify(statementData), JSON.stringify(summary), id);
+  } else {
+    db.prepare(
+      `INSERT INTO bank_statement_analyses (id, client_id, file_name, original_file_name, statement_data, summary, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+    ).run(id, clientId || null, fileName, originalFileName, JSON.stringify(statementData), JSON.stringify(summary));
+  }
+  return id;
+}
+
+function getBankStatementAnalysis(id) {
+  const row = db.prepare("SELECT * FROM bank_statement_analyses WHERE id = ?").get(id);
+  if (!row) return null;
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    fileName: row.file_name,
+    originalFileName: row.original_file_name,
+    statementData: JSON.parse(row.statement_data || "{}"),
+    summary: JSON.parse(row.summary || "{}"),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function listBankStatementAnalyses(clientId, limit = 50) {
+  const rows = db.prepare(
+    `SELECT id, file_name, original_file_name, summary, created_at, updated_at 
+     FROM bank_statement_analyses 
+     WHERE client_id = ? OR ? IS NULL
+     ORDER BY created_at DESC 
+     LIMIT ?`
+  ).all(clientId, clientId ? null : clientId, limit);
+  
+  return rows.map(row => ({
+    id: row.id,
+    fileName: row.file_name,
+    originalFileName: row.original_file_name,
+    summary: JSON.parse(row.summary || "{}"),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+function saveBankStatementChange({ id, analysisId, changeType, previousState, newState, changeSummary }) {
+  db.prepare(
+    `INSERT INTO statement_change_history (id, analysis_id, change_type, previous_state, new_state, change_summary)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    analysisId,
+    changeType,
+    previousState ? JSON.stringify(previousState) : null,
+    newState ? JSON.stringify(newState) : null,
+    changeSummary || ""
+  );
+}
+
+function getStatementChangeHistory(analysisId, limit = 100) {
+  const rows = db.prepare(
+    `SELECT * FROM statement_change_history 
+     WHERE analysis_id = ? 
+     ORDER BY created_at DESC 
+     LIMIT ?`
+  ).all(analysisId, limit);
+  
+  return rows.map(row => ({
+    id: row.id,
+    analysisId: row.analysis_id,
+    changeType: row.change_type,
+    previousState: row.previous_state ? JSON.parse(row.previous_state) : null,
+    newState: row.new_state ? JSON.parse(row.new_state) : null,
+    changeSummary: row.change_summary,
+    createdAt: row.created_at,
+  }));
+}
+
+function deleteBankStatementAnalysis(id) {
+  db.prepare("DELETE FROM bank_statement_analyses WHERE id = ?").run(id);
+}
+
+// Duplicate Transaction Functions
+function saveDuplicateTransactions(analysisId, duplicates = []) {
+  const stmt = db.prepare(
+    `INSERT INTO duplicate_transactions (id, analysis_id, transaction_id_1, transaction_id_2, match_score, match_reason)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  );
+  const tx = db.transaction((items) => {
+    for (const dup of items) {
+      stmt.run(
+        `dup-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        analysisId,
+        dup.transactionId1,
+        dup.transactionId2,
+        dup.matchScore || 0.95,
+        dup.matchReason || "Identical amount, date, and narration"
+      );
+    }
+  });
+  tx(duplicates);
+}
+
+function getDuplicateTransactions(analysisId) {
+  const rows = db.prepare(
+    "SELECT * FROM duplicate_transactions WHERE analysis_id = ? ORDER BY match_score DESC"
+  ).all(analysisId);
+  return rows.map(row => ({
+    id: row.id,
+    transactionId1: row.transaction_id_1,
+    transactionId2: row.transaction_id_2,
+    matchScore: row.match_score,
+    matchReason: row.match_reason,
+    createdAt: row.created_at,
+  }));
+}
+
+// Account Mapping Functions
+function saveAccountMapping({ clientId, debitAccount, creditAccount, frequency = 1, confidenceScore = 0.8 }) {
+  try {
+    db.prepare(
+      `INSERT INTO account_mappings (id, client_id, debit_account, credit_account, frequency, confidence_score, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+    ).run(
+      `amapping-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      clientId,
+      debitAccount,
+      creditAccount,
+      frequency,
+      confidenceScore
+    );
+  } catch (error) {
+    if (error.message.includes("UNIQUE constraint failed")) {
+      db.prepare(
+        `UPDATE account_mappings SET frequency = frequency + 1, confidence_score = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE client_id = ? AND debit_account = ? AND credit_account = ?`
+      ).run(confidenceScore, clientId, debitAccount, creditAccount);
+    }
+  }
+}
+
+function getAccountMappings(clientId) {
+  return db.prepare(
+    `SELECT * FROM account_mappings WHERE client_id = ? AND is_active = 1 ORDER BY frequency DESC, updated_at DESC`
+  ).all(clientId);
+}
+
+function deleteAccountMapping(id) {
+  db.prepare("UPDATE account_mappings SET is_active = 0 WHERE id = ?").run(id);
+}
+
+// Export Validation Functions
+function saveExportValidation({ analysisId, validationType, status, issueCount, issues }) {
+  db.prepare(
+    `INSERT INTO export_validations (id, analysis_id, validation_type, status, issue_count, issues)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(
+    `val-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    analysisId,
+    validationType,
+    status,
+    issueCount || 0,
+    issues ? JSON.stringify(issues) : null
+  );
+}
+
+function getExportValidations(analysisId) {
+  const rows = db.prepare(
+    "SELECT * FROM export_validations WHERE analysis_id = ? ORDER BY created_at DESC"
+  ).all(analysisId);
+  return rows.map(row => ({
+    id: row.id,
+    validationType: row.validation_type,
+    status: row.status,
+    issueCount: row.issue_count,
+    issues: row.issues ? JSON.parse(row.issues) : [],
+    createdAt: row.created_at,
+  }));
+}
+
+// Analytics Functions
+function recordMetric(clientId, analysisId, metricType, metricValue, metricLabel) {
+  db.prepare(
+    `INSERT INTO processing_analytics (id, client_id, analysis_id, metric_type, metric_value, metric_label)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(
+    `metric-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    clientId,
+    analysisId,
+    metricType,
+    metricValue,
+    metricLabel
+  );
+}
+
+function getAnalytics(clientId, days = 30) {
+  const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  return db.prepare(
+    `SELECT metric_type, COUNT(*) as count, AVG(metric_value) as avg_value
+     FROM processing_analytics
+     WHERE client_id = ? AND created_at >= ?
+     GROUP BY metric_type`
+  ).all(clientId, startDate);
+}
+
+// Reconciliation Functions
+function saveReconciliation({ analysisId, clientId, pushDate, xmlHash, expectedCount, status = "pending" }) {
+  db.prepare(
+    `INSERT INTO tally_reconciliation (id, analysis_id, client_id, push_date, xml_hash, expected_count, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    `recon-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    analysisId,
+    clientId,
+    pushDate,
+    xmlHash,
+    expectedCount,
+    status
+  );
+}
+
+function updateReconciliation(id, { receivedCount, matchedEntries, status, mismatches }) {
+  db.prepare(
+    `UPDATE tally_reconciliation SET received_count = ?, matched_entries = ?, status = ?, mismatches = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  ).run(receivedCount, matchedEntries, status, mismatches ? JSON.stringify(mismatches) : null, id);
+}
+
+function getReconciliation(analysisId) {
+  const row = db.prepare(
+    "SELECT * FROM tally_reconciliation WHERE analysis_id = ?"
+  ).get(analysisId);
+  if (!row) return null;
+  return {
+    id: row.id,
+    analysisId: row.analysis_id,
+    clientId: row.client_id,
+    pushDate: row.push_date,
+    xmlHash: row.xml_hash,
+    expectedCount: row.expected_count,
+    receivedCount: row.received_count,
+    matchedEntries: row.matched_entries,
+    status: row.status,
+    mismatches: row.mismatches ? JSON.parse(row.mismatches) : [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+// User Assignment Functions
+function assignAnalysisToUser(analysisId, userId, assignedBy) {
+  db.prepare(
+    `INSERT INTO user_assignments (id, analysis_id, user_id, assigned_by, status)
+     VALUES (?, ?, ?, ?, 'assigned')`
+  ).run(
+    `assign-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    analysisId,
+    userId,
+    assignedBy
+  );
+}
+
+function getAnalysisAssignees(analysisId) {
+  return db.prepare(
+    `SELECT ua.*, u.name, u.email FROM user_assignments ua
+     LEFT JOIN users u ON u.id = ua.user_id
+     WHERE ua.analysis_id = ? AND ua.status = 'assigned'`
+  ).all(analysisId);
+}
+
+// Audit Log Functions
+function recordAuditLog(analysisId, userId, action, changes, ipAddress) {
+  db.prepare(
+    `INSERT INTO audit_logs (id, analysis_id, user_id, action, changes, ip_address)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(
+    `audit-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    analysisId,
+    userId,
+    action,
+    changes ? JSON.stringify(changes) : null,
+    ipAddress
+  );
+}
+
+function getAuditLogs(analysisId, limit = 100) {
+  return db.prepare(
+    `SELECT * FROM audit_logs WHERE analysis_id = ? ORDER BY created_at DESC LIMIT ?`
+  ).all(analysisId, limit);
+}
+
 module.exports = {
   createClient,
   createDocumentRequest,
@@ -603,4 +1015,26 @@ module.exports = {
   updatePendingPushStatus,
   saveTallyLedgers,
   getTallyLedgers,
+  saveBankStatementAnalysis,
+  getBankStatementAnalysis,
+  listBankStatementAnalyses,
+  saveBankStatementChange,
+  getStatementChangeHistory,
+  deleteBankStatementAnalysis,
+  saveDuplicateTransactions,
+  getDuplicateTransactions,
+  saveAccountMapping,
+  getAccountMappings,
+  deleteAccountMapping,
+  saveExportValidation,
+  getExportValidations,
+  recordMetric,
+  getAnalytics,
+  saveReconciliation,
+  updateReconciliation,
+  getReconciliation,
+  assignAnalysisToUser,
+  getAnalysisAssignees,
+  recordAuditLog,
+  getAuditLogs,
 };

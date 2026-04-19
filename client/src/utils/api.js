@@ -319,3 +319,191 @@ export async function reviseRecommendations(payload, userInstructions, context =
     body: JSON.stringify({ payload, userInstructions, context }),
   });
 }
+
+// Bank statement persistence and undo/redo endpoints
+export async function saveBankStatementAnalysis(statement, analysisId = null) {
+  return fetchJson("/api/bank-statements/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: analysisId, statement }),
+  });
+}
+
+export async function getBankStatementAnalysis(analysisId) {
+  return fetchJson(`/api/bank-statements/analyses/${analysisId}`);
+}
+
+export async function listBankStatementAnalyses(clientId = null, limit = 50) {
+  const params = new URLSearchParams();
+  if (clientId) params.append("clientId", clientId);
+  params.append("limit", limit);
+  return fetchJson(`/api/bank-statements/analyses?${params.toString()}`);
+}
+
+export async function deleteBankStatementAnalysis(analysisId) {
+  return fetchJson(`/api/bank-statements/analyses/${analysisId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getStatementChangeHistory(analysisId, limit = 100) {
+  return fetchJson(`/api/bank-statements/analyses/${analysisId}/history?limit=${limit}`);
+}
+
+export async function recordStatementChange(analysisId, changeType, previousState, newState, changeSummary) {
+  return fetchJson(`/api/bank-statements/analyses/${analysisId}/record-change`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      changeType,
+      previousState,
+      newState,
+      changeSummary,
+    }),
+  });
+}
+
+export async function undoStatementChange(analysisId) {
+  return fetchJson(`/api/bank-statements/analyses/${analysisId}/undo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+// Duplicate Detection
+export async function detectDuplicates(analysisId) {
+  return fetchJson(`/api/bank-statements/analyses/${analysisId}/detect-duplicates`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}
+
+export async function getDuplicates(analysisId) {
+  return fetchJson(`/api/bank-statements/analyses/${analysisId}/duplicates`);
+}
+
+// Pre-Export Validation
+export async function validateForExport(analysisId, ledgerHeads = []) {
+  return fetchJson(`/api/bank-statements/analyses/${analysisId}/validate-export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ledgerHeads }),
+  });
+}
+
+export async function getValidations(analysisId) {
+  return fetchJson(`/api/bank-statements/analyses/${analysisId}/validations`);
+}
+
+export async function getMappingRules(clientId) {
+  return fetchJson(`/api/bank-statements/mapping-rules?clientId=${clientId}`);
+}
+
+// Account Mappings
+export async function saveAccountMapping(clientIdOrPayload, debitAccount, creditAccount, frequency = 1, confidenceScore = 0.8) {
+  const payload =
+    typeof clientIdOrPayload === "object" && clientIdOrPayload !== null
+      ? {
+          clientId: clientIdOrPayload.clientId,
+          debitAccount: clientIdOrPayload.debitAccount,
+          creditAccount: clientIdOrPayload.creditAccount,
+          frequency: clientIdOrPayload.frequency ?? 1,
+          confidenceScore:
+            clientIdOrPayload.confidenceScore ??
+            clientIdOrPayload.confidence ??
+            0.8,
+        }
+      : {
+          clientId: clientIdOrPayload,
+          debitAccount,
+          creditAccount,
+          frequency,
+          confidenceScore,
+        };
+
+  return fetchJson(`/api/bank-statements/account-mappings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getAccountMappings(clientId) {
+  return fetchJson(`/api/bank-statements/account-mappings?clientId=${clientId}`);
+}
+
+export async function deleteAccountMapping(mappingId) {
+  return fetchJson(`/api/bank-statements/account-mappings/${mappingId}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+// Analytics
+export async function recordMetric(clientId, analysisId, metricType, metricValue, metricLabel = "") {
+  return fetchJson(`/api/bank-statements/analytics/record-metric`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clientId, analysisId, metricType, metricValue, metricLabel }),
+  });
+}
+
+export async function getStatementMetrics(statement, clientId, analysisId) {
+  return fetchJson(`/api/bank-statements/analytics/statement-metrics`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ statement, clientId, analysisId }),
+  });
+}
+
+export async function getAnalytics(clientId, days = 30) {
+  return fetchJson(`/api/bank-statements/analytics?clientId=${clientId}&days=${days}`);
+}
+
+// Reconciliation
+export async function startReconciliation(analysisId, clientId, expectedCount = 0, xmlHash = "") {
+  return fetchJson(`/api/bank-statements/reconciliation/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ analysisId, clientId, expectedCount, xmlHash }),
+  });
+}
+
+export async function verifyReconciliation(analysisId, receivedCount, matchedEntries = 0, mismatches = []) {
+  return fetchJson(`/api/bank-statements/reconciliation/${analysisId}/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ receivedCount, matchedEntries, mismatches }),
+  });
+}
+
+export async function getReconciliation(analysisId) {
+  return fetchJson(`/api/bank-statements/reconciliation/${analysisId}`);
+}
+
+// User Assignments
+export async function assignUserToAnalysis(analysisId, userId, assignedBy = null) {
+  return fetchJson(`/api/bank-statements/analyses/${analysisId}/assign-user`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, assignedBy }),
+  });
+}
+
+export async function getAnalysisAssignees(analysisId) {
+  return fetchJson(`/api/bank-statements/analyses/${analysisId}/assignees`);
+}
+
+// Audit Logging
+export async function recordAuditLog(analysisId, userId, action, changes = {}, ipAddress = "") {
+  return fetchJson(`/api/bank-statements/analyses/${analysisId}/audit-log`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, action, changes, ipAddress }),
+  });
+}
+
+export async function getAuditLogs(analysisId, limit = 100) {
+  return fetchJson(`/api/bank-statements/analyses/${analysisId}/audit-logs?limit=${limit}`);
+}

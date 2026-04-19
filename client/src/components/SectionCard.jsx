@@ -1,14 +1,18 @@
 export default function SectionCard({ title, subtitle, actions, children, className = "" }) {
   return (
-    <section className={`glass-panel animate-rise rounded-[28px] border border-white/70 p-6 shadow-panel ${className}`}>
-      <div className="flex flex-col gap-3 border-b border-white/50 pb-4 md:flex-row md:items-start md:justify-between">
+    <section className={`glass-card fade-in-up rounded-[24px] border border-white/75 p-8 shadow-lg hover:shadow-xl ${className}`}>
+      <div className="flex flex-col gap-4 border-b border-white/40 pb-6 md:flex-row md:items-start md:justify-between">
         <div>
-          <h2 className="font-display text-2xl text-slate-900">{title}</h2>
-          {subtitle ? <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">{subtitle}</p> : null}
+          <h2 className="font-semibold text-2xl text-slate-900 tracking-tight">{title}</h2>
+          {subtitle ? (
+            <p className="mt-3 max-w-2xl text-sm leading-relaxed text-slate-600">{subtitle}</p>
+          ) : null}
         </div>
-        {actions ? <div className="flex items-center gap-3">{actions}</div> : null}
+        {actions ? (
+          <div className="flex items-center gap-3 transition-smooth">{actions}</div>
+        ) : null}
       </div>
-      <div className="mt-6">{children}</div>
+      <div className="mt-8 transition-smooth">{children}</div>
     </section>
   );
 }

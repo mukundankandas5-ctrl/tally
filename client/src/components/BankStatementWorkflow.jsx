@@ -1,11 +1,47 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import ConfidenceBadge from "./ConfidenceBadge";
 import FileDropzone from "./FileDropzone";
 import SectionCard from "./SectionCard";
 import StatCard from "./StatCard";
+import DuplicateDetectionPanel from "./DuplicateDetectionPanel";
+import ExportValidationPanel from "./ExportValidationPanel";
+import AccountMapperDashboard from "./AccountMapperDashboard";
+import AnalyticsDashboard from "./AnalyticsDashboard";
+import ReconciliationTracker from "./ReconciliationTracker";
+import UserAssignmentPanel from "./UserAssignmentPanel";
+import RuleDashboard from "./RuleDashboard";
 
 import { downloadBlob } from "../utils/download";
-import { exportBankStatement, learnBankStatement, reviseBankStatement, uploadBankStatement } from "../utils/api";
+import {
+  exportBankStatement,
+  learnBankStatement,
+  reviseBankStatement,
+  uploadBankStatement,
+  saveBankStatementAnalysis,
+  listBankStatementAnalyses,
+  getStatementChangeHistory,
+  recordStatementChange,
+  undoStatementChange,
+  getBankStatementAnalysis,
+  deleteBankStatementAnalysis,
+  detectDuplicates,
+  getDuplicates,
+  validateForExport,
+  getValidations,
+  saveAccountMapping,
+  getAccountMappings,
+  deleteAccountMapping,
+  recordMetric,
+  getStatementMetrics,
+  getAnalytics,
+  startReconciliation,
+  verifyReconciliation,
+  getReconciliation,
+  assignUserToAnalysis,
+  getAnalysisAssignees,
+  recordAuditLog,
+  getAuditLogs,
+} from "../utils/api";
 import { formatCurrency, formatDate } from "../utils/formatters";
 
 function buildDerivedSummary(statement) {
@@ -62,24 +98,222 @@ function getTopAccounts(transactions, field) {
 export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [statement, setStatement] = useState(initialState);
+  const [analysisId, setAnalysisId] = useState(initialState?.analysisId || null);
   const [isUploading, setIsUploading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isRevising, setIsRevising] = useState(false);
   const [isLearning, setIsLearning] = useState(false);
   const [reviewOnly, setReviewOnly] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [savedAnalyses, setSavedAnalyses] = useState([]);
+  const [changeHistory, setChangeHistory] = useState([]);
+  const [canUndo, setCanUndo] = useState(false);
   const [assistantPrompt, setAssistantPrompt] = useState(
     "For UPI transactions, classify people as UPI Transfer and classify businesses by the most suitable business ledger."
   );
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const previousStatementRef = useRef(null);
+
+  // Advanced filter state
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [filters, setFilters] = useState({
+    confidenceMin: 0,
+    confidenceMax: 100,
+    ledger: "",
+    voucherType: "",
+    amountMin: "",
+    amountMax: "",
+    dateStart: "",
+    dateEnd: "",
+    learningSource: "",
+    hasFlags: "any",
+    needsReview: "any",
+  });
+
+  // Bulk selection state
+  const [selectedTransactionIds, setSelectedTransactionIds] = useState(new Set());
+  const [bulkActionField, setBulkActionField] = useState("");
+  const [bulkActionValue, setBulkActionValue] = useState("");
+
+  // Phase 4: Advanced Features State
+  const [showPhase4Features, setShowPhase4Features] = useState(false);
+  const [validationResults, setValidationResults] = useState(null);
+  const [accountMappings, setAccountMappings] = useState([]);
+  const [currentUserAssignments, setCurrentUserAssignments] = useState([]);
+
+  // Load saved analyses on mount
+  useEffect(() => {
+    const loadSavedAnalyses = async () => {
+      try {
+        const result = await listBankStatementAnalyses(null, 20);
+        if (result.success) {
+          setSavedAnalyses(result.analyses || []);
+        }
+      } catch (err) {
+        console.error("Failed to load saved analyses:", err);
+      }
+    };
+    loadSavedAnalyses();
+  }, []);
+
+  // Load change history when analysis changes
+  useEffect(() => {
+    const loadHistory = async () => {
+      if (!analysisId) {
+        setChangeHistory([]);
+        setCanUndo(false);
+        return;
+      }
+      try {
+        const result = await getStatementChangeHistory(analysisId, 50);
+        if (result.success) {
+          setChangeHistory(result.history || []);
+          setCanUndo((result.history || []).length > 0);
+        }
+      } catch (err) {
+        console.error("Failed to load change history:", err);
+      }
+    };
+    loadHistory();
+  }, [analysisId]);
+
+  // Auto-save the statement after analysis is complete
+  useEffect(() => {
+    const doAutoSave = async () => {
+      if (!statement || !statement.transactions || statement.transactions.length === 0 || isSaving) {
+        return;
+      }
+      // Only auto-save if statement has changed and we have the data
+      if (previousStatementRef.current && JSON.stringify(previousStatementRef.current) === JSON.stringify(statement)) {
+        return;
+      }
+      
+      try {
+        setIsSaving(true);
+        const result = await saveBankStatementAnalysis(statement, analysisId);
+        if (result.success && !analysisId) {
+          setAnalysisId(result.id);
+        }
+        previousStatementRef.current = statement;
+      } catch (err) {
+        console.error("Failed to auto-save statement:", err);
+      } finally {
+        setIsSaving(false);
+      }
+    };
+
+    // Debounce auto-save to avoid too many requests
+    const autoSaveTimer = setTimeout(doAutoSave, 2000);
+    return () => clearTimeout(autoSaveTimer);
+  }, [statement, analysisId, isSaving]);
 
   const summary = useMemo(() => buildDerivedSummary(statement), [statement]);
 
   const filteredTransactions = useMemo(() => {
     const transactions = statement.transactions || [];
-    if (!reviewOnly) return transactions;
-    return transactions.filter((transaction) => transaction.needsReview || transaction.confidence === "low");
-  }, [reviewOnly, statement.transactions]);
+    
+    return transactions.filter((transaction) => {
+      // Confidence filter
+      const confidence = Number(transaction.confidence || 0);
+      if (confidence < filters.confidenceMin || confidence > filters.confidenceMax) {
+        return false;
+      }
+
+      // Ledger filter
+      if (filters.ledger && transaction.ledger !== filters.ledger) {
+        return false;
+      }
+
+      // Voucher type filter
+      if (filters.voucherType && transaction.voucherType !== filters.voucherType) {
+        return false;
+      }
+
+      // Amount range filter
+      const debit = Number(transaction.debit || 0);
+      const credit = Number(transaction.credit || 0);
+      const amount = debit > 0 ? debit : credit;
+      
+      if (filters.amountMin && amount < Number(filters.amountMin)) {
+        return false;
+      }
+      if (filters.amountMax && amount > Number(filters.amountMax)) {
+        return false;
+      }
+
+      // Date range filter
+      if (filters.dateStart && transaction.date < filters.dateStart) {
+        return false;
+      }
+      if (filters.dateEnd && transaction.date > filters.dateEnd) {
+        return false;
+      }
+
+      // Learning source filter
+      if (filters.learningSource) {
+        const hasLearningSource = Boolean(transaction.learningSource);
+        if (filters.learningSource === "learned" && !hasLearningSource) {
+          return false;
+        }
+        if (filters.learningSource === "manual" && hasLearningSource) {
+          return false;
+        }
+      }
+
+      // Flags filter
+      if (filters.hasFlags !== "any") {
+        const flags = transaction.flags || [];
+        const hasFlags = Array.isArray(flags) && flags.length > 0;
+        if (filters.hasFlags === "with" && !hasFlags) {
+          return false;
+        }
+        if (filters.hasFlags === "without" && hasFlags) {
+          return false;
+        }
+      }
+
+      // Needs review filter
+      if (filters.needsReview !== "any") {
+        const needsReview = transaction.needsReview || transaction.confidence === "low";
+        if (filters.needsReview === "yes" && !needsReview) {
+          return false;
+        }
+        if (filters.needsReview === "no" && needsReview) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [statement.transactions, filters]);
+
+  const hasActiveFilters = useMemo(() => {
+    return (
+      filters.confidenceMin > 0 ||
+      filters.confidenceMax < 100 ||
+      filters.ledger ||
+      filters.voucherType ||
+      filters.amountMin ||
+      filters.amountMax ||
+      filters.dateStart ||
+      filters.dateEnd ||
+      filters.learningSource ||
+      filters.hasFlags !== "any" ||
+      filters.needsReview !== "any"
+    );
+  }, [filters]);
+
+  const ledgerOptions = useMemo(() => {
+    const ledgers = new Set(statement.transactions?.map((t) => t.ledger).filter(Boolean) || []);
+    return Array.from(ledgers).sort();
+  }, [statement.transactions]);
+
+  const voucherTypes = useMemo(() => {
+    const types = new Set(statement.transactions?.map((t) => t.voucherType).filter(Boolean) || []);
+    return Array.from(types).sort();
+  }, [statement.transactions]);
 
   const topDebitAccounts = useMemo(() => getTopAccounts(statement.transactions, "debitAccount"), [statement.transactions]);
   const topCreditAccounts = useMemo(() => getTopAccounts(statement.transactions, "creditAccount"), [statement.transactions]);
@@ -97,12 +331,31 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
       return;
     }
 
-      try {
-        setError("");
-        setSuccessMessage("");
-        setIsUploading(true);
-        const payload = await uploadBankStatement(selectedFile, assistantPrompt);
-        setStatement(payload);
+    try {
+      setError("");
+      setSuccessMessage("");
+      setIsUploading(true);
+      const payload = await uploadBankStatement(selectedFile, assistantPrompt);
+      setStatement(payload);
+      
+      // Auto-save the new analysis
+      setTimeout(async () => {
+        try {
+          const saveResult = await saveBankStatementAnalysis(payload);
+          if (saveResult.success) {
+            setAnalysisId(saveResult.id);
+            setSuccessMessage("Bank statement analyzed and saved successfully. You can now modify and review transactions.");
+            // Reload saved analyses
+            const listResult = await listBankStatementAnalyses(null, 20);
+            if (listResult.success) {
+              setSavedAnalyses(listResult.analyses || []);
+            }
+          }
+        } catch (saveErr) {
+          console.error("Failed to save analysis:", saveErr);
+          setError("Analysis completed but failed to save. Refresh to avoid losing data.");
+        }
+      }, 500);
     } catch (uploadError) {
       setError(uploadError.message);
     } finally {
@@ -113,6 +366,9 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
 
 
     const updateTransaction = (transactionId, field, value) => {
+      const originalTransaction = statement.transactions.find((t) => t.id === transactionId);
+      const originalValue = originalTransaction?.[field];
+
       setStatement((current) => ({
         ...current,
         transactions: current.transactions.map((transaction) =>
@@ -141,6 +397,17 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
             : transaction
         ),
       }));
+
+      // Record change for undo functionality
+      if (analysisId && originalValue !== value) {
+        recordStatementChange(
+          analysisId,
+          "transaction_field_update",
+          { transactionId, field, value: originalValue },
+          { transactionId, field, value },
+          `Updated ${field} for transaction ${transactionId}`
+        ).catch((err) => console.error("Failed to record change:", err));
+      }
     };
 
   const updateConfigField = (field, value) => {
@@ -223,13 +490,184 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
     }
   };
 
+  const handleUndoChanges = async () => {
+    if (!analysisId || !canUndo) {
+      setError("No changes to undo.");
+      return;
+    }
+
+    try {
+      setError("");
+      const result = await undoStatementChange(analysisId);
+      if (result.success && result.undoData) {
+        const previousState = result.undoData.previousState;
+        if (previousState && previousState.transactionId) {
+          // Undo a transaction field update
+          const transactionId = previousState.transactionId;
+          const field = previousState.field;
+          const value = previousState.value;
+          
+          setStatement((current) => ({
+            ...current,
+            transactions: current.transactions.map((t) =>
+              t.id === transactionId ? { ...t, [field]: value } : t
+            ),
+          }));
+        }
+        setSuccessMessage(`Undone: ${result.undoData.changeSummary}`);
+        // Reload history
+        const historyResult = await getStatementChangeHistory(analysisId, 50);
+        if (historyResult.success) {
+          setChangeHistory(historyResult.history || []);
+          setCanUndo((historyResult.history || []).length > 0);
+        }
+      }
+    } catch (err) {
+      setError(`Failed to undo changes: ${err.message}`);
+    }
+  };
+
+  const handleLoadAnalysis = async (id) => {
+    try {
+      setError("");
+      const result = await getBankStatementAnalysis(id);
+      if (result.success) {
+        setStatement(result.statementData);
+        setAnalysisId(id);
+        setSavedAnalyses((current) =>
+          current.map((analysis) =>
+            analysis.id === id ? { ...analysis, selectedAt: new Date().toISOString() } : analysis
+          )
+        );
+        setSuccessMessage("Previous analysis loaded successfully.");
+        setShowHistory(false);
+      }
+    } catch (err) {
+      setError(`Failed to load analysis: ${err.message}`);
+    }
+  };
+
+  const handleDeleteAnalysis = async (id) => {
+    if (!window.confirm("Are you sure you want to delete this analysis?")) {
+      return;
+    }
+
+    try {
+      await deleteBankStatementAnalysis(id);
+      setSavedAnalyses((current) => current.filter((a) => a.id !== id));
+      if (analysisId === id) {
+        setAnalysisId(null);
+        setStatement({
+          transactions: [],
+          tallyConfig: {},
+          summary: {},
+        });
+      }
+      setSuccessMessage("Analysis deleted successfully.");
+    } catch (err) {
+      setError(`Failed to delete analysis: ${err.message}`);
+    }
+  };
+
+  const handleFilterChange = (filterName, value) => {
+    setFilters((current) => ({
+      ...current,
+      [filterName]: value,
+    }));
+  };
+
+  const handleClearFilters = () => {
+    setFilters({
+      confidenceMin: 0,
+      confidenceMax: 100,
+      ledger: "",
+      voucherType: "",
+      amountMin: "",
+      amountMax: "",
+      dateStart: "",
+      dateEnd: "",
+      learningSource: "",
+      hasFlags: "any",
+      needsReview: "any",
+    });
+  };
+
+  const toggleTransactionSelection = (transactionId) => {
+    setSelectedTransactionIds((current) => {
+      const newSet = new Set(current);
+      if (newSet.has(transactionId)) {
+        newSet.delete(transactionId);
+      } else {
+        newSet.add(transactionId);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedTransactionIds.size === filteredTransactions.length && filteredTransactions.length > 0) {
+      setSelectedTransactionIds(new Set());
+    } else {
+      setSelectedTransactionIds(new Set(filteredTransactions.map((t) => t.id)));
+    }
+  };
+
+  const applyBulkUpdate = (field, value) => {
+    if (selectedTransactionIds.size === 0) {
+      setError("No transactions selected.");
+      return;
+    }
+
+    try {
+      setError("");
+      setSuccessMessage("");
+      
+      // Store previous state for undo
+      const previousState = statement.transactions.filter((t) => selectedTransactionIds.has(t.id));
+
+      setStatement((current) => ({
+        ...current,
+        transactions: current.transactions.map((transaction) =>
+          selectedTransactionIds.has(transaction.id)
+            ? {
+                ...transaction,
+                [field]: field === "needsReview" ? Boolean(value) : value,
+              }
+            : transaction
+        ),
+      }));
+
+      // Record bulk change
+      if (analysisId) {
+        recordStatementChange(
+          analysisId,
+          "bulk_field_update",
+          { transactionIds: Array.from(selectedTransactionIds), field, count: selectedTransactionIds.size },
+          { field, value, count: selectedTransactionIds.size },
+          `Updated ${field} for ${selectedTransactionIds.size} transaction(s)`
+        ).catch((err) => console.error("Failed to record change:", err));
+      }
+
+      setSuccessMessage(`Applied "${value}" to ${selectedTransactionIds.size} transaction(s).`);
+      setBulkActionField("");
+      setBulkActionValue("");
+    } catch (err) {
+      setError(`Failed to apply bulk update: ${err.message}`);
+    }
+  };
+
+  const clearSelection = () => {
+    setSelectedTransactionIds(new Set());
+  };
+
   return (
     <div className="space-y-6">
       <SectionCard
         title="Bank Statement Ledger Mapper"
         subtitle="Upload a monthly bank statement PDF, review ledger classification transaction by transaction, then export Payment, Receipt, and Contra vouchers."
         actions={
-          <button
+          <div className="flex flex-wrap items-center gap-2">
+            <button
               type="button"
               onClick={handleAnalyze}
               disabled={isUploading}
@@ -237,6 +675,27 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
             >
               {isUploading ? "Analyzing..." : "Analyze Statement"}
             </button>
+            {canUndo && (
+              <button
+                type="button"
+                onClick={handleUndoChanges}
+                className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700 transition hover:bg-amber-100"
+                title="Undo the last change"
+              >
+                ↶ Undo
+              </button>
+            )}
+            {savedAnalyses.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowHistory(!showHistory)}
+                className="rounded-2xl border border-slate-300 bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-200"
+                title="Load a previous analysis"
+              >
+                📋 History
+              </button>
+            )}
+          </div>
         }
       >
         <FileDropzone
@@ -247,6 +706,56 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
           onFileSelected={setSelectedFile}
           buttonLabel="Upload statement"
         />
+
+        {showHistory && savedAnalyses.length > 0 ? (
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-700">Saved Analyses</h3>
+              <button
+                type="button"
+                onClick={() => setShowHistory(false)}
+                className="text-sm text-slate-500 hover:text-slate-700"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-2 max-h-[300px] overflow-y-auto">
+              {savedAnalyses.map((analysis) => (
+                <div
+                  key={analysis.id}
+                  className={`flex items-center justify-between rounded-lg border p-3 transition ${
+                    analysisId === analysis.id
+                      ? "border-teal-300 bg-teal-50"
+                      : "border-slate-300 bg-white hover:border-slate-400"
+                  }`}
+                >
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-slate-900">{analysis.originalFileName}</p>
+                    <p className="text-xs text-slate-500">
+                      {analysis.summary?.transactionCount || 0} transactions • {new Date(analysis.createdAt).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <div className="ml-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleLoadAnalysis(analysis.id)}
+                      className="rounded px-2 py-1 text-xs font-semibold text-teal-700 hover:bg-teal-100"
+                    >
+                      Load
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteAnalysis(analysis.id)}
+                      className="rounded px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         {error ? (
           <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
@@ -299,21 +808,265 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
       <div className="grid gap-6 xl:grid-cols-[1.4fr_0.8fr]">
         <SectionCard
           title="Transaction Review"
-          subtitle="Edit narration-level mappings, filter to uncertain rows, and finalize the voucher type before exporting."
+          subtitle="Edit narration-level mappings, filter to find specific transactions, and finalize the voucher type before exporting."
           actions={
             <div className="flex items-center gap-3">
-              <label className="flex items-center gap-2 text-sm text-slate-600">
-                <input type="checkbox" checked={reviewOnly} onChange={(event) => setReviewOnly(event.target.checked)} />
-                Low confidence only
-              </label>
+              <button
+                type="button"
+                onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+                  showAdvancedFilters
+                    ? "bg-teal-100 text-teal-800 border border-teal-300"
+                    : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                }`}
+                title="Show/hide advanced filters"
+              >
+                🔍 {showAdvancedFilters ? "Hide" : "Show"} Filters
+              </button>
+              {hasActiveFilters && (
+                <>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-teal-100 px-3 py-1 text-xs font-semibold text-teal-800">
+                    {filteredTransactions.length} / {statement.transactions?.length || 0}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleClearFilters}
+                    className="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+                  >
+                    Clear
+                  </button>
+                </>
+              )}
               <ConfidenceBadge confidence={statement.confidence} />
             </div>
           }
         >
+          {showAdvancedFilters ? (
+            <div className="mb-6 rounded-3xl border border-slate-200 bg-slate-50 p-6">
+              <h3 className="mb-4 text-sm font-semibold text-slate-700">Advanced Filters</h3>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                {/* Confidence Range */}
+                <div>
+                  <label className="label-base">Confidence: {filters.confidenceMin}% - {filters.confidenceMax}%</label>
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={filters.confidenceMin}
+                      onChange={(e) => handleFilterChange("confidenceMin", Math.min(Number(e.target.value), filters.confidenceMax))}
+                      className="w-full"
+                    />
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={filters.confidenceMax}
+                      onChange={(e) => handleFilterChange("confidenceMax", Math.max(Number(e.target.value), filters.confidenceMin))}
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+
+                {/* Ledger */}
+                <div>
+                  <label className="label-base">Ledger</label>
+                  <select
+                    className="input-base"
+                    value={filters.ledger}
+                    onChange={(e) => handleFilterChange("ledger", e.target.value)}
+                  >
+                    <option value="">All ledgers</option>
+                    {ledgerOptions.map((ledger) => (
+                      <option key={ledger} value={ledger}>
+                        {ledger}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Voucher Type */}
+                <div>
+                  <label className="label-base">Voucher Type</label>
+                  <select
+                    className="input-base"
+                    value={filters.voucherType}
+                    onChange={(e) => handleFilterChange("voucherType", e.target.value)}
+                  >
+                    <option value="">All types</option>
+                    {voucherTypes.map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Amount Range */}
+                <div>
+                  <label className="label-base">Amount Range</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      placeholder="Min"
+                      value={filters.amountMin}
+                      onChange={(e) => handleFilterChange("amountMin", e.target.value)}
+                      className="input-base flex-1"
+                    />
+                    <input
+                      type="number"
+                      placeholder="Max"
+                      value={filters.amountMax}
+                      onChange={(e) => handleFilterChange("amountMax", e.target.value)}
+                      className="input-base flex-1"
+                    />
+                  </div>
+                </div>
+
+                {/* Date Range */}
+                <div>
+                  <label className="label-base">Start Date</label>
+                  <input
+                    type="date"
+                    value={filters.dateStart}
+                    onChange={(e) => handleFilterChange("dateStart", e.target.value)}
+                    className="input-base"
+                  />
+                </div>
+
+                <div>
+                  <label className="label-base">End Date</label>
+                  <input
+                    type="date"
+                    value={filters.dateEnd}
+                    onChange={(e) => handleFilterChange("dateEnd", e.target.value)}
+                    className="input-base"
+                  />
+                </div>
+
+                {/* Learning Source */}
+                <div>
+                  <label className="label-base">Learning Source</label>
+                  <select
+                    className="input-base"
+                    value={filters.learningSource}
+                    onChange={(e) => handleFilterChange("learningSource", e.target.value)}
+                  >
+                    <option value="">All sources</option>
+                    <option value="learned">Learned rules only</option>
+                    <option value="manual">Manual entries only</option>
+                  </select>
+                </div>
+
+                {/* Flags */}
+                <div>
+                  <label className="label-base">Flags</label>
+                  <select
+                    className="input-base"
+                    value={filters.hasFlags}
+                    onChange={(e) => handleFilterChange("hasFlags", e.target.value)}
+                  >
+                    <option value="any">Any status</option>
+                    <option value="with">Has flags</option>
+                    <option value="without">No flags</option>
+                  </select>
+                </div>
+
+                {/* Needs Review */}
+                <div>
+                  <label className="label-base">Review Status</label>
+                  <select
+                    className="input-base"
+                    value={filters.needsReview}
+                    onChange={(e) => handleFilterChange("needsReview", e.target.value)}
+                  >
+                    <option value="any">Any status</option>
+                    <option value="yes">Needs review</option>
+                    <option value="no">Reviewed</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {selectedTransactionIds.size > 0 ? (
+            <div className="mb-4 rounded-2xl border border-teal-300 bg-teal-50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-semibold text-teal-900">
+                    {selectedTransactionIds.size} transaction{selectedTransactionIds.size !== 1 ? "s" : ""} selected
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Ledger Quick Update */}
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={bulkActionValue}
+                      onChange={(e) => setBulkActionValue(e.target.value)}
+                      className="input-base min-w-[150px]"
+                      placeholder="Select action..."
+                    >
+                      <option value="">Bulk actions...</option>
+                      <option value="">─ Set Ledger ─</option>
+                      {ledgerOptions.map((ledger) => (
+                        <option key={`bulk-${ledger}`} value={ledger}>
+                          • {ledger}
+                        </option>
+                      ))}
+                      <option value="">─ Set Voucher Type ─</option>
+                      {voucherTypes.map((type) => (
+                        <option key={`bulk-type-${type}`} value={type}>
+                          • {type}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => {
+                        if (bulkActionValue) {
+                          const field = ledgerOptions.includes(bulkActionValue) ? "ledger" : "voucherType";
+                          applyBulkUpdate(field, bulkActionValue);
+                        }
+                      }}
+                      disabled={!bulkActionValue}
+                      className="rounded-lg border border-teal-300 bg-teal-100 px-3 py-2 text-sm font-semibold text-teal-800 transition hover:bg-teal-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Apply
+                    </button>
+                  </div>
+
+                  {/* Mark as Reviewed */}
+                  <button
+                    onClick={() => applyBulkUpdate("needsReview", false)}
+                    className="rounded-lg border border-teal-300 bg-white px-3 py-2 text-sm font-semibold text-teal-700 transition hover:bg-teal-50"
+                  >
+                    ✓ Mark Reviewed
+                  </button>
+
+                  {/* Clear Selection */}
+                  <button
+                    onClick={clearSelection}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100"
+                  >
+                    Deselect All
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
           <div className="overflow-x-auto rounded-3xl border border-slate-200 bg-white">
               <table className="min-w-full">
                 <thead className="bg-slate-50">
                   <tr>
+                    <th className="table-head w-12">
+                      <input
+                        type="checkbox"
+                        checked={selectedTransactionIds.size === filteredTransactions.length && filteredTransactions.length > 0}
+                        onChange={toggleSelectAll}
+                        title="Select all filtered transactions"
+                        className="cursor-pointer"
+                      />
+                    </th>
                     <th className="table-head">Date</th>
                     <th className="table-head">Narration</th>
                     <th className="table-head">Debit</th>
@@ -333,7 +1086,16 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
                       const options = getLedgerOptions(ledgerHeads, transaction.ledgerHead);
                       const accountOptions = getAccountOptions(ledgerHeads, statement, transaction.debitAccount || transaction.creditAccount);
                       return (
-                        <tr key={transaction.id}>
+                        <tr key={transaction.id} className={selectedTransactionIds.has(transaction.id) ? "bg-teal-50" : ""}>
+                          <td className="table-cell w-12">
+                            <input
+                              type="checkbox"
+                              checked={selectedTransactionIds.has(transaction.id)}
+                              onChange={() => toggleTransactionSelection(transaction.id)}
+                              title={`Select transaction ${transaction.id}`}
+                              className="cursor-pointer"
+                            />
+                          </td>
                         <td className="table-cell">
                           <input
                             className="input-base"
@@ -455,14 +1217,135 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
                   ) : (
                     <tr>
                       <td className="px-4 py-10 text-center text-sm text-slate-500" colSpan="10">
-                        {reviewOnly ? "No low-confidence transactions right now." : "Upload a statement to review classified transactions."}
+                        {filteredTransactions.length === 0 ? (
+                          hasActiveFilters ? (
+                            <div>
+                              <p>No transactions match the current filters.</p>
+                              <button
+                                type="button"
+                                onClick={handleClearFilters}
+                                className="mt-2 text-xs font-semibold text-teal-600 hover:text-teal-700 underline"
+                              >
+                                Clear filters to see all transactions
+                              </button>
+                            </div>
+                          ) : statement.transactions?.length ? (
+                            "No transactions loaded. Apply filters to view data."
+                          ) : (
+                            "Upload a statement to review classified transactions."
+                          )
+                        ) : null}
                       </td>
                     </tr>
                 )}
               </tbody>
             </table>
           </div>
-        </SectionCard>
+
+          {hasActiveFilters ? (
+            <div className="mt-4 rounded-2xl bg-slate-100 p-4">
+              <p className="mb-3 text-sm font-semibold text-slate-700">Active Filters:</p>
+              <div className="flex flex-wrap gap-2">
+                {filters.confidenceMin > 0 || filters.confidenceMax < 100 ? (
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700 border border-slate-300">
+                    Confidence: {filters.confidenceMin}%-{filters.confidenceMax}%
+                    <button
+                      onClick={() => {
+                        handleFilterChange("confidenceMin", 0);
+                        handleFilterChange("confidenceMax", 100);
+                      }}
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ) : null}
+                {filters.ledger ? (
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700 border border-slate-300">
+                    Ledger: {filters.ledger}
+                    <button
+                      onClick={() => handleFilterChange("ledger", "")}
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ) : null}
+                {filters.voucherType ? (
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700 border border-slate-300">
+                    Type: {filters.voucherType}
+                    <button
+                      onClick={() => handleFilterChange("voucherType", "")}
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ) : null}
+                {filters.amountMin || filters.amountMax ? (
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700 border border-slate-300">
+                    Amount: {filters.amountMin || "0"} - {filters.amountMax || "∞"}
+                    <button
+                      onClick={() => {
+                        handleFilterChange("amountMin", "");
+                        handleFilterChange("amountMax", "");
+                      }}
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ) : null}
+                {filters.dateStart || filters.dateEnd ? (
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700 border border-slate-300">
+                    Dates: {filters.dateStart || "any"} to {filters.dateEnd || "any"}
+                    <button
+                      onClick={() => {
+                        handleFilterChange("dateStart", "");
+                        handleFilterChange("dateEnd", "");
+                      }}
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ) : null}
+                {filters.learningSource ? (
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700 border border-slate-300">
+                    Source: {filters.learningSource === "learned" ? "Learned" : "Manual"}
+                    <button
+                      onClick={() => handleFilterChange("learningSource", "")}
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ) : null}
+                {filters.hasFlags !== "any" ? (
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700 border border-slate-300">
+                    Flags: {filters.hasFlags === "with" ? "Has flags" : "No flags"}
+                    <button
+                      onClick={() => handleFilterChange("hasFlags", "any")}
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ) : null}
+                {filters.needsReview !== "any" ? (
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700 border border-slate-300">
+                    Review: {filters.needsReview === "yes" ? "Needs review" : "Reviewed"}
+                    <button
+                      onClick={() => handleFilterChange("needsReview", "any")}
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
 
         <SectionCard
           title="Tally Export"
@@ -541,6 +1424,93 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
             </div>
           ) : null}
         </SectionCard>
+
+        {/* Phase 4: Advanced Features Section */}
+        <div className="mt-8 space-y-6">
+          <div className="flex items-center justify-between px-6">
+            <h2 className="text-2xl font-bold text-slate-800">Advanced Features</h2>
+            <button
+              onClick={() => setShowPhase4Features(!showPhase4Features)}
+              className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+                showPhase4Features
+                  ? "bg-blue-100 text-blue-800 border border-blue-300"
+                  : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+              }`}
+            >
+              {showPhase4Features ? "Hide Features" : "Show Features"}
+            </button>
+          </div>
+
+          {showPhase4Features && (
+            <div className="space-y-6">
+              {/* Duplicate Detection */}
+              <DuplicateDetectionPanel
+                analysisId={analysisId}
+                transactions={statement.transactions || []}
+                onDuplicateResolved={() => {
+                  // Reload statement if needed
+                }}
+              />
+
+              {/* Pre-Export Validation */}
+              <ExportValidationPanel
+                analysisId={analysisId}
+                transactions={statement.transactions || []}
+                config={statement.tallyConfig}
+                onValidationComplete={(results) => {
+                  setValidationResults(results);
+                }}
+              />
+
+              {/* Grid for side-by-side components */}
+              <div className="grid gap-6 lg:grid-cols-2">
+                {/* Account Mapper */}
+                <AccountMapperDashboard
+                  clientId={statement.clientId || ""}
+                  onMappingChange={() => {
+                    // Reload mappings if needed
+                  }}
+                />
+
+                {/* Analytics Dashboard */}
+                <AnalyticsDashboard
+                  clientId={statement.clientId || ""}
+                  analysisId={analysisId}
+                />
+              </div>
+
+              {/* Reconciliation Tracker */}
+              <ReconciliationTracker
+                analysisId={analysisId}
+                totalTransactions={statement.transactions?.length || 0}
+                totalAmount={
+                  (statement.transactions || []).reduce(
+                    (sum, t) => sum + (Number(t.debit) || 0) + (Number(t.credit) || 0),
+                    0
+                  )
+                }
+              />
+
+              {/* User Assignment and Rule Dashboard Grid */}
+              <div className="grid gap-6 lg:grid-cols-2">
+                {/* User Assignment */}
+                <UserAssignmentPanel
+                  analysisId={analysisId}
+                  currentUser="current_user"
+                  onAssignmentChange={() => {
+                    // Handle assignment changes
+                  }}
+                />
+
+                {/* Rule Dashboard */}
+                <RuleDashboard
+                  clientId={statement.clientId || ""}
+                  mappingRules={statement.mappingRules || []}
+                />
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
