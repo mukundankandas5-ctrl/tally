@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeftToLine,
   ArrowRightToLine,
@@ -64,15 +64,16 @@ import {
 } from "./utils/api";
 import { isSupabaseEnabled } from "./utils/authClient";
 import { formatCurrency, formatDate, formatNumber } from "./utils/formatters";
-import AnalyticsDashboard from "./components/AnalyticsDashboard";
-import AccountMapperDashboard from "./components/AccountMapperDashboard";
-import DuplicateDetectionPanel from "./components/DuplicateDetectionPanel";
 import { EmptyState } from "./components/EmptyState";
 import { OnboardingWizard } from "./components/OnboardingWizard";
-import ExportValidationPanel from "./components/ExportValidationPanel";
-import ReconciliationTracker from "./components/ReconciliationTracker";
-import RuleDashboard from "./components/RuleDashboard";
-import UserAssignmentPanel from "./components/UserAssignmentPanel";
+
+const AnalyticsDashboard = lazy(() => import("./components/AnalyticsDashboard"));
+const AccountMapperDashboard = lazy(() => import("./components/AccountMapperDashboard"));
+const DuplicateDetectionPanel = lazy(() => import("./components/DuplicateDetectionPanel"));
+const ExportValidationPanel = lazy(() => import("./components/ExportValidationPanel"));
+const ReconciliationTracker = lazy(() => import("./components/ReconciliationTracker"));
+const RuleDashboard = lazy(() => import("./components/RuleDashboard"));
+const UserAssignmentPanel = lazy(() => import("./components/UserAssignmentPanel"));
 
 const SIDEBAR_WIDTH = 220;
 const SIDEBAR_COLLAPSED_WIDTH = 64;
@@ -142,6 +143,14 @@ const ALL_CATEGORIES = [
   "Capital Contribution",
   "Petty Cash",
 ];
+
+function AddOnLoadingCard() {
+  return (
+    <div className="glass-panel rounded-[28px] border border-white/70 p-5 text-sm text-[#6B7280]">
+      Loading advanced review tools...
+    </div>
+  );
+}
 
 const CATEGORY_LEDGER_FALLBACKS = {
   "Sales / Revenue": "Sales",
@@ -1553,6 +1562,7 @@ export default function App() {
   const [authUsers, setAuthUsers] = useState([]);
   const [mappingRules, setMappingRules] = useState([]);
   const [validationSnapshot, setValidationSnapshot] = useState(null);
+  const [showBankAddOns, setShowBankAddOns] = useState(false);
   const [bankProcessingConfig, setBankProcessingConfig] = useState({
     clientId: "",
     companyName: "",
@@ -1792,6 +1802,8 @@ export default function App() {
       })),
     };
   }
+
+  const currentBankStatement = useMemo(() => buildCurrentBankStatement(), [bankStatement, bankRows, bankProcessingConfig]);
 
   async function persistBankAnalysis(nextStatement = null) {
     const payload = await saveBankStatementAnalysis(nextStatement || buildCurrentBankStatement(), bankAnalysisId || null);
@@ -2984,75 +2996,100 @@ export default function App() {
                       onCorrectTransaction={handleTransactionCorrection}
                     />
 
-                    <div className="grid gap-4 xl:grid-cols-2">
-                      <DuplicateDetectionPanel
-                        analysisId={bankAnalysisId}
-                        transactions={buildCurrentBankStatement().transactions}
-                        onDuplicateResolved={(duplicateId, resolution) => {
-                          if (resolution !== "merged") return;
-                          addToast("Duplicate pair marked for merge review.", "success");
-                        }}
-                      />
-                      <ExportValidationPanel
-                        analysisId={bankAnalysisId}
-                        transactions={buildCurrentBankStatement().transactions}
-                        config={{ ledgerHeads }}
-                        onValidationComplete={(result) => setValidationSnapshot(result)}
-                      />
-                      <RuleDashboard clientId={bankProcessingConfig.clientId} mappingRules={mappingRules} />
-                      <AccountMapperDashboard
-                        clientId={bankProcessingConfig.clientId}
-                        onMappingChange={() => {
-                          if (bankProcessingConfig.clientId) {
-                            getMappingRules(bankProcessingConfig.clientId)
-                              .then((payload) => setMappingRules(payload.rules || []))
-                              .catch(() => {});
-                          }
-                        }}
-                      />
-                      <AnalyticsDashboard
-                        clientId={bankProcessingConfig.clientId}
-                        analysisId={bankAnalysisId}
-                        statement={buildCurrentBankStatement()}
-                        dateRange={30}
-                      />
-                      <UserAssignmentPanel
-                        analysisId={bankAnalysisId}
-                        currentUser={authUser}
-                        onAssignmentChange={() => addToast("Team assignment updated.", "success")}
-                      />
-                    </div>
-
-                    <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-                      <ReconciliationTracker
-                        analysisId={bankAnalysisId}
-                        clientId={bankProcessingConfig.clientId}
-                        totalTransactions={bankRows.length}
-                        totalAmount={bankRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)}
-                      />
-                      <div className="glass-panel rounded-[28px] border border-white/70 p-5">
-                        <div className="text-lg font-semibold text-[#111827]">Review Operations Summary</div>
-                        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                          <div className="rounded-2xl border border-white/70 bg-white/45 p-4">
-                            <div className="text-xs uppercase tracking-[0.12em] text-[#6B7280]">Saved Analysis</div>
-                            <div className="mt-2 text-sm font-semibold text-[#111827]">{bankAnalysisId ? bankAnalysisId.slice(-12) : "Not saved yet"}</div>
-                          </div>
-                          <div className="rounded-2xl border border-white/70 bg-white/45 p-4">
-                            <div className="text-xs uppercase tracking-[0.12em] text-[#6B7280]">Validation</div>
-                            <div className="mt-2 text-sm font-semibold text-[#111827]">
-                              {validationSnapshot ? (validationSnapshot.canExport ? "Ready to export" : "Needs fixes") : "Not run yet"}
-                            </div>
-                          </div>
-                          <div className="rounded-2xl border border-white/70 bg-white/45 p-4">
-                            <div className="text-xs uppercase tracking-[0.12em] text-[#6B7280]">Advanced Filters</div>
-                            <div className="mt-2 text-sm font-semibold text-[#111827]">Confidence, category, voucher, debit/credit</div>
-                          </div>
-                          <div className="rounded-2xl border border-white/70 bg-white/45 p-4">
-                            <div className="text-xs uppercase tracking-[0.12em] text-[#6B7280]">Team Members</div>
-                            <div className="mt-2 text-sm font-semibold text-[#111827]">{authUsers.length || 0} available users</div>
+                    <div className="glass-panel rounded-[28px] border border-white/70 p-5">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div>
+                          <div className="text-lg font-semibold text-[#111827]">Advanced Review Add-ons</div>
+                          <div className="mt-1 text-sm text-[#6B7280]">
+                            Optional tools for duplicates, validation, analytics, reconciliation, mappings, and team review.
+                            Core upload, review, XML export, and Tally push continue to work independently.
                           </div>
                         </div>
+                        <Button
+                          variant="ghost"
+                          className="justify-center border border-white/70 bg-white/55 backdrop-blur-xl hover:bg-white/75"
+                          onClick={() => setShowBankAddOns((current) => !current)}
+                        >
+                          {showBankAddOns ? "Hide Add-ons" : "Open Add-ons"}
+                        </Button>
                       </div>
+
+                      {showBankAddOns ? (
+                        <div className="mt-5 space-y-4">
+                          <Suspense fallback={<AddOnLoadingCard />}>
+                            <div className="grid gap-4 xl:grid-cols-2">
+                              <DuplicateDetectionPanel
+                                analysisId={bankAnalysisId}
+                                transactions={currentBankStatement.transactions}
+                                onDuplicateResolved={(duplicateId, resolution) => {
+                                  if (resolution !== "merged") return;
+                                  addToast("Duplicate pair marked for merge review.", "success");
+                                }}
+                              />
+                              <ExportValidationPanel
+                                analysisId={bankAnalysisId}
+                                transactions={currentBankStatement.transactions}
+                                config={{ ledgerHeads }}
+                                onValidationComplete={(result) => setValidationSnapshot(result)}
+                              />
+                              <RuleDashboard clientId={bankProcessingConfig.clientId} mappingRules={mappingRules} />
+                              <AccountMapperDashboard
+                                clientId={bankProcessingConfig.clientId}
+                                onMappingChange={() => {
+                                  if (bankProcessingConfig.clientId) {
+                                    getMappingRules(bankProcessingConfig.clientId)
+                                      .then((payload) => setMappingRules(payload.rules || []))
+                                      .catch(() => {});
+                                  }
+                                }}
+                              />
+                              <AnalyticsDashboard
+                                clientId={bankProcessingConfig.clientId}
+                                analysisId={bankAnalysisId}
+                                statement={currentBankStatement}
+                                dateRange={30}
+                              />
+                              <UserAssignmentPanel
+                                analysisId={bankAnalysisId}
+                                currentUser={authUser}
+                                onAssignmentChange={() => addToast("Team assignment updated.", "success")}
+                              />
+                            </div>
+
+                            <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+                              <ReconciliationTracker
+                                analysisId={bankAnalysisId}
+                                clientId={bankProcessingConfig.clientId}
+                                totalTransactions={bankRows.length}
+                                totalAmount={bankRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)}
+                              />
+                              <div className="glass-panel rounded-[28px] border border-white/70 p-5">
+                                <div className="text-lg font-semibold text-[#111827]">Review Operations Summary</div>
+                                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                                  <div className="rounded-2xl border border-white/70 bg-white/45 p-4">
+                                    <div className="text-xs uppercase tracking-[0.12em] text-[#6B7280]">Saved Analysis</div>
+                                    <div className="mt-2 text-sm font-semibold text-[#111827]">{bankAnalysisId ? bankAnalysisId.slice(-12) : "Not saved yet"}</div>
+                                  </div>
+                                  <div className="rounded-2xl border border-white/70 bg-white/45 p-4">
+                                    <div className="text-xs uppercase tracking-[0.12em] text-[#6B7280]">Validation</div>
+                                    <div className="mt-2 text-sm font-semibold text-[#111827]">
+                                      {validationSnapshot ? (validationSnapshot.canExport ? "Ready to export" : "Needs fixes") : "Not run yet"}
+                                    </div>
+                                  </div>
+                                  <div className="rounded-2xl border border-white/70 bg-white/45 p-4">
+                                    <div className="text-xs uppercase tracking-[0.12em] text-[#6B7280]">Advanced Filters</div>
+                                    <div className="mt-2 text-sm font-semibold text-[#111827]">Confidence, category, voucher, debit/credit</div>
+                                  </div>
+                                  <div className="rounded-2xl border border-white/70 bg-white/45 p-4">
+                                    <div className="text-xs uppercase tracking-[0.12em] text-[#6B7280]">Team Members</div>
+                                    <div className="mt-2 text-sm font-semibold text-[#111827]">{authUsers.length || 0} available users</div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </Suspense>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>

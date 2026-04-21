@@ -15,6 +15,8 @@ const connectorRoutes = require("./routes/connectorRoutes");
 const authRoutes = require("./routes/authRoutes");
 const activityRoutes = require("./routes/activityRoutes");
 const transactionRoutes = require("./routes/transactionRoutes");
+const complianceRoutes = require("./routes/complianceRoutes");
+const mlClassificationRoutes = require("./routes/mlClassificationRoutes");
 
 const app = express();
 
@@ -41,6 +43,8 @@ app.use("/api/recommendations", recommendationRoutes);
 app.use("/api/gst", gstRoutes);
 app.use("/api/tally", tallyRoutes);
 app.use("/api/activity", activityRoutes);
+app.use("/api/compliance", complianceRoutes);
+app.use("/api/ml-classify", mlClassificationRoutes);
 app.use("/api", transactionRoutes);
 app.use("/api", connectorRoutes);
 

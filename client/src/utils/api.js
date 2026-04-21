@@ -507,3 +507,40 @@ export async function recordAuditLog(analysisId, userId, action, changes = {}, i
 export async function getAuditLogs(analysisId, limit = 100) {
   return fetchJson(`/api/bank-statements/analyses/${analysisId}/audit-logs?limit=${limit}`);
 }
+
+// ML Classification
+export async function classifySingleTransaction(transaction) {
+  return fetchJson("/api/ml-classify/single", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(transaction),
+  });
+}
+
+export async function classifyBatchTransactions(transactions) {
+  return fetchJson("/api/ml-classify/batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ transactions }),
+  });
+}
+
+export async function recordMLFeedback(transactionId, originalClassification, userCorrection) {
+  return fetchJson("/api/ml-classify/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ transactionId, originalClassification, userCorrection }),
+  });
+}
+
+export async function detectAnomalies(transaction) {
+  return fetchJson("/api/ml-classify/anomaly-check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(transaction),
+  });
+}
+
+export async function getMLMetrics() {
+  return fetchJson("/api/ml-classify/metrics");
+}

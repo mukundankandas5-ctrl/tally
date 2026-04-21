@@ -1,15 +1,12 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { Suspense, lazy, useMemo, useState, useEffect, useRef } from "react";
 import ConfidenceBadge from "./ConfidenceBadge";
+import MLConfidenceScore from "./MLConfidenceScore";
+import QuickCorrectionPanel from "./QuickCorrectionPanel";
+import AnomalyWarningBadge from "./AnomalyWarningBadge";
+import ProgressiveMLClassifier from "./ProgressiveMLClassifier";
 import FileDropzone from "./FileDropzone";
 import SectionCard from "./SectionCard";
 import StatCard from "./StatCard";
-import DuplicateDetectionPanel from "./DuplicateDetectionPanel";
-import ExportValidationPanel from "./ExportValidationPanel";
-import AccountMapperDashboard from "./AccountMapperDashboard";
-import AnalyticsDashboard from "./AnalyticsDashboard";
-import ReconciliationTracker from "./ReconciliationTracker";
-import UserAssignmentPanel from "./UserAssignmentPanel";
-import RuleDashboard from "./RuleDashboard";
 
 import { downloadBlob } from "../utils/download";
 import {
@@ -43,6 +40,14 @@ import {
   getAuditLogs,
 } from "../utils/api";
 import { formatCurrency, formatDate } from "../utils/formatters";
+
+const DuplicateDetectionPanel = lazy(() => import("./DuplicateDetectionPanel"));
+const ExportValidationPanel = lazy(() => import("./ExportValidationPanel"));
+const AccountMapperDashboard = lazy(() => import("./AccountMapperDashboard"));
+const AnalyticsDashboard = lazy(() => import("./AnalyticsDashboard"));
+const ReconciliationTracker = lazy(() => import("./ReconciliationTracker"));
+const UserAssignmentPanel = lazy(() => import("./UserAssignmentPanel"));
+const RuleDashboard = lazy(() => import("./RuleDashboard"));
 
 function buildDerivedSummary(statement) {
   const transactions = statement.transactions || [];
@@ -115,6 +120,10 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const previousStatementRef = useRef(null);
+
+  // ML Classification state
+  const [showMLClassifier, setShowMLClassifier] = useState(false);
+  const [mlEnhancedTransactions, setMlEnhancedTransactions] = useState({});
 
   // Advanced filter state
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
@@ -325,6 +334,63 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
     { label: "Need Review", value: String(summary.reviewCount), tone: summary.reviewCount > 0 ? "rose" : "teal", caption: `${summary.transactionCount} transactions parsed` },
   ];
 
+  const handleMLClassificationComplete = (classifiedTransactions) => {
+    // Map the classified transactions by ID for quick lookup
+    const mlMap = {};
+    classifiedTransactions.forEach((tx) => {
+      mlMap[tx.id] = {
+        mlConfidence: tx.mlConfidence || 0,
+        mlCategory: tx.result?.category || tx.category,
+        mlVoucherType: tx.result?.voucherType || tx.voucherType,
+        anomalies: tx.anomalies || [],
+        riskScore: tx.riskScore || 0,
+        confidenceBreakdown: tx.confidenceBreakdown,
+      };
+    });
+
+    setMlEnhancedTransactions(mlMap);
+
+    // Optionally merge ML results into statement
+    setStatement((current) => ({
+      ...current,
+      transactions: current.transactions.map((tx) => {
+        const mlData = mlMap[tx.id];
+        if (mlData) {
+          return {
+            ...tx,
+            mlConfidence: mlData.mlConfidence,
+            mlCategory: mlData.mlCategory,
+            mlVoucherType: mlData.mlVoucherType,
+            anomalies: mlData.anomalies,
+            riskScore: mlData.riskScore,
+            confidenceBreakdown: mlData.confidenceBreakdown,
+          };
+        }
+        return tx;
+      }),
+    }));
+
+    setShowMLClassifier(false);
+    setSuccessMessage(
+      `✓ ML classification complete! ${classifiedTransactions.filter((t) => t.mlConfidence > 0.8).length} transactions have high confidence.`
+    );
+  };
+
+  const handleTransactionCorrected = (transactionId, correctedData) => {
+    updateTransaction(transactionId, "ledger", correctedData.ledger);
+    updateTransaction(transactionId, "voucherType", correctedData.voucherType);
+    
+    // Update ML map to reflect the correction
+    setMlEnhancedTransactions((current) => ({
+      ...current,
+      [transactionId]: {
+        ...current[transactionId],
+        mlCategory: correctedData.ledger,
+        mlVoucherType: correctedData.voucherType,
+      },
+    }));
+  };
+
   const handleAnalyze = async () => {
     if (!selectedFile) {
       setError("Choose a bank statement PDF before analyzing.");
@@ -338,13 +404,16 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
       const payload = await uploadBankStatement(selectedFile, assistantPrompt);
       setStatement(payload);
       
+      // Trigger ML classification
+      setShowMLClassifier(true);
+      
       // Auto-save the new analysis
       setTimeout(async () => {
         try {
           const saveResult = await saveBankStatementAnalysis(payload);
           if (saveResult.success) {
             setAnalysisId(saveResult.id);
-            setSuccessMessage("Bank statement analyzed and saved successfully. You can now modify and review transactions.");
+            setSuccessMessage("Bank statement analyzed and saved successfully. ML classification is running...");
             // Reload saved analyses
             const listResult = await listBankStatementAnalyses(null, 20);
             if (listResult.success) {
@@ -767,6 +836,16 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
           </div>
         ) : null}
 
+        {showMLClassifier && statement?.transactions && statement.transactions.length > 0 ? (
+          <div className="mt-4">
+            <ProgressiveMLClassifier
+              transactions={statement.transactions}
+              onClassificationComplete={handleMLClassificationComplete}
+              autoStart={true}
+            />
+          </div>
+        ) : null}
+
         <div className="mt-6 grid gap-4 md:grid-cols-4">
           {statCards.map((card) => (
             <StatCard key={card.label} {...card} />
@@ -1077,7 +1156,10 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
                     <th className="table-head">Credit A/C</th>
                     <th className="table-head">Voucher</th>
                     <th className="table-head">Confidence</th>
+                    <th className="table-head">ML Score</th>
+                    <th className="table-head">Anomalies</th>
                     <th className="table-head">Review</th>
+                    <th className="table-head">Actions</th>
                   </tr>
                 </thead>
               <tbody>
@@ -1195,6 +1277,26 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
                         <td className="table-cell">
                           <ConfidenceBadge confidence={transaction.confidence} />
                         </td>
+                        <td className="table-cell">
+                          {mlEnhancedTransactions[transaction.id] ? (
+                            <MLConfidenceScore 
+                              confidence={mlEnhancedTransactions[transaction.id].mlConfidence}
+                              breakdown={mlEnhancedTransactions[transaction.id].confidenceBreakdown}
+                            />
+                          ) : (
+                            <span className="text-xs text-slate-400">—</span>
+                          )}
+                        </td>
+                        <td className="table-cell">
+                          {mlEnhancedTransactions[transaction.id] ? (
+                            <AnomalyWarningBadge 
+                              anomalies={mlEnhancedTransactions[transaction.id].anomalies}
+                              riskScore={mlEnhancedTransactions[transaction.id].riskScore}
+                            />
+                          ) : (
+                            <span className="text-xs text-slate-400">—</span>
+                          )}
+                        </td>
                           <td className="table-cell">
                             <div className="flex flex-col items-center gap-2">
                               <label className="flex items-center justify-center">
@@ -1210,6 +1312,17 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
                                 </span>
                               ) : null}
                             </div>
+                          </td>
+                          <td className="table-cell">
+                            <QuickCorrectionPanel
+                              transactionId={transaction.id}
+                              currentLedger={transaction.ledger}
+                              currentVoucherType={transaction.voucherType}
+                              narration={transaction.narration}
+                              amount={transaction.debit || transaction.credit}
+                              ledgerOptions={ledgerOptions}
+                              onCorrected={(correctedData) => handleTransactionCorrected(transaction.id, correctedData)}
+                            />
                           </td>
                         </tr>
                       );
@@ -1442,73 +1555,76 @@ export default function BankStatementWorkflow({ ledgerHeads, initialState }) {
           </div>
 
           {showPhase4Features && (
-            <div className="space-y-6">
-              {/* Duplicate Detection */}
-              <DuplicateDetectionPanel
-                analysisId={analysisId}
-                transactions={statement.transactions || []}
-                onDuplicateResolved={() => {
-                  // Reload statement if needed
-                }}
-              />
+            <Suspense
+              fallback={
+                <div className="rounded-3xl border border-white/70 bg-white/65 p-6 text-sm text-slate-600 backdrop-blur-xl">
+                  Loading advanced features...
+                </div>
+              }
+            >
+              <div className="space-y-6">
+                <div className="rounded-3xl border border-blue-100 bg-blue-50/70 px-5 py-4 text-sm text-slate-700">
+                  These tools are optional and loaded only when opened, so your main analysis, review, XML export, and Tally flow stay unaffected.
+                </div>
 
-              {/* Pre-Export Validation */}
-              <ExportValidationPanel
-                analysisId={analysisId}
-                transactions={statement.transactions || []}
-                config={statement.tallyConfig}
-                onValidationComplete={(results) => {
-                  setValidationResults(results);
-                }}
-              />
-
-              {/* Grid for side-by-side components */}
-              <div className="grid gap-6 lg:grid-cols-2">
-                {/* Account Mapper */}
-                <AccountMapperDashboard
-                  clientId={statement.clientId || ""}
-                  onMappingChange={() => {
-                    // Reload mappings if needed
+                <DuplicateDetectionPanel
+                  analysisId={analysisId}
+                  transactions={statement.transactions || []}
+                  onDuplicateResolved={() => {
+                    // Reload statement if needed
                   }}
                 />
 
-                {/* Analytics Dashboard */}
-                <AnalyticsDashboard
-                  clientId={statement.clientId || ""}
+                <ExportValidationPanel
                   analysisId={analysisId}
-                />
-              </div>
-
-              {/* Reconciliation Tracker */}
-              <ReconciliationTracker
-                analysisId={analysisId}
-                totalTransactions={statement.transactions?.length || 0}
-                totalAmount={
-                  (statement.transactions || []).reduce(
-                    (sum, t) => sum + (Number(t.debit) || 0) + (Number(t.credit) || 0),
-                    0
-                  )
-                }
-              />
-
-              {/* User Assignment and Rule Dashboard Grid */}
-              <div className="grid gap-6 lg:grid-cols-2">
-                {/* User Assignment */}
-                <UserAssignmentPanel
-                  analysisId={analysisId}
-                  currentUser="current_user"
-                  onAssignmentChange={() => {
-                    // Handle assignment changes
+                  transactions={statement.transactions || []}
+                  config={statement.tallyConfig}
+                  onValidationComplete={(results) => {
+                    setValidationResults(results);
                   }}
                 />
 
-                {/* Rule Dashboard */}
-                <RuleDashboard
-                  clientId={statement.clientId || ""}
-                  mappingRules={statement.mappingRules || []}
+                <div className="grid gap-6 lg:grid-cols-2">
+                  <AccountMapperDashboard
+                    clientId={statement.clientId || ""}
+                    onMappingChange={() => {
+                      // Reload mappings if needed
+                    }}
+                  />
+
+                  <AnalyticsDashboard
+                    clientId={statement.clientId || ""}
+                    analysisId={analysisId}
+                  />
+                </div>
+
+                <ReconciliationTracker
+                  analysisId={analysisId}
+                  totalTransactions={statement.transactions?.length || 0}
+                  totalAmount={
+                    (statement.transactions || []).reduce(
+                      (sum, t) => sum + (Number(t.debit) || 0) + (Number(t.credit) || 0),
+                      0
+                    )
+                  }
                 />
+
+                <div className="grid gap-6 lg:grid-cols-2">
+                  <UserAssignmentPanel
+                    analysisId={analysisId}
+                    currentUser="current_user"
+                    onAssignmentChange={() => {
+                      // Handle assignment changes
+                    }}
+                  />
+
+                  <RuleDashboard
+                    clientId={statement.clientId || ""}
+                    mappingRules={statement.mappingRules || []}
+                  />
+                </div>
               </div>
-            </div>
+            </Suspense>
           )}
         </div>
       </div>
