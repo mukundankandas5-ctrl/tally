@@ -1,4 +1,4 @@
-const db = require('../db/database');
+const { db } = require('../db/database');
 const AppError = require('../utils/appError');
 
 class ComplianceService {
