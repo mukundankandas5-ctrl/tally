@@ -250,7 +250,7 @@ class ConfidenceScoringEngine {
     if (/\d{2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/.test(narration_str)) score += 0.15;
 
     // Has invoice/document reference
-    if (/inv|ref|pol|no|\./{2,}/.test(narration_str)) score += 0.15;
+    if (/inv|ref|pol|no|\.\.|\.{2,}/.test(narration_str)) score += 0.15;
 
     // Contains common keywords
     const keywords = ["payment", "receipt", "deposit", "refund", "transfer"];

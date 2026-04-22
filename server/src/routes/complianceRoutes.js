@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const complianceService = require('../services/complianceService');
-const auth = require('../middleware/auth');
+const { requireAuth } = require('../middleware/auth');
 
 // Apply authentication to all routes
-router.use(auth);
+router.use(requireAuth);
 
 /**
  * GET /api/compliance/scorecard
