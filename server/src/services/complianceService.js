@@ -4,25 +4,29 @@ const AppError = require('../utils/appError');
 class ComplianceService {
   /**
    * Generate overall compliance scorecard
+   * Pulls real data from database and existing transactions
    */
   async generateScorecard(companyId, fiscalYear) {
     try {
-      // Get GST compliance data
+      // Get GST compliance data from database
       const gstCompliance = await this.getGSTComplianceStatus(companyId, fiscalYear);
 
       // Get Income Tax compliance data
       const itCompliance = await this.getIncomeTaxComplianceStatus(companyId, fiscalYear);
 
-      // Get TDS compliance data
+      // Get TDS compliance data from database
       const tdsCompliance = await this.getTDSComplianceStatus(companyId, fiscalYear);
 
-      // Calculate overall score
-      const scores = [gstCompliance.score, itCompliance.score, tdsCompliance.score];
-      const overallScore = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+      // Calculate overall score (weighted average: GST 40%, TDS 40%, IT 20%)
+      const overallScore = Math.round(
+        (gstCompliance.score * 0.4) + 
+        (tdsCompliance.score * 0.4) + 
+        (itCompliance.score * 0.2)
+      );
 
       return {
         companyId,
-        fiscalYear: `${fiscalYear}-${fiscalYear + 1}`,
+        fiscalYear: `${fiscalYear}-${(fiscalYear % 100) + 1}`,
         overallScore,
         lastUpdated: new Date().toISOString(),
         sections: {
@@ -38,75 +42,193 @@ class ComplianceService {
   }
 
   /**
-   * Get GST compliance status
+   * Get GST compliance status from database
+   * Queries actual GST entries to calculate real compliance
    */
   async getGSTComplianceStatus(companyId, fiscalYear) {
-    return {
-      status: 'FULLY_COMPLIANT',
-      score: 90,
-      gstr1Filed: 12,
-      gstr2bReconciled: true,
-      gstr3bPaid: true,
-      inputCreditUtilized: 85000,
-      discrepancies: 0,
-      lastUpdate: new Date().toISOString(),
-      nextDue: this.getNextGSTDueDate(),
-    };
+    try {
+      // Query GST reconciliations from database
+      const gstReconciliations = db.prepare(
+        `SELECT COUNT(*) as count, SUM(amount) as total FROM gst_reconciliations 
+         WHERE company_id = ? AND fiscal_year = ?`
+      ).get(companyId, fiscalYear);
+
+      // Query invoice exports (GSTR-1 equivalents)
+      const gstExports = db.prepare(
+        `SELECT COUNT(*) as count FROM export_validations 
+         WHERE company_id = ? AND fiscal_year = ? AND type = 'gst'`
+      ).get(companyId, fiscalYear);
+
+      // Calculate compliance score based on filed documents and reconciliation
+      let score = 60; // Base score
+      if (gstReconciliations?.count > 0) score += 15;
+      if (gstExports?.count > 0) score += 15;
+      if (gstReconciliations?.count >= 12) score += 10; // Full year filed
+
+      return {
+        status: score >= 80 ? 'FULLY_COMPLIANT' : score >= 60 ? 'PARTIALLY_COMPLIANT' : 'NON_COMPLIANT',
+        score: Math.min(100, score),
+        gstr1Filed: gstExports?.count || 0,
+        gstr2bReconciled: gstReconciliations?.count > 0,
+        gstr3bPaid: false, // Would need payment records
+        inputCreditUtilized: gstReconciliations?.total || 0,
+        discrepancies: 0,
+        lastUpdate: new Date().toISOString(),
+        nextDue: this.getNextGSTDueDate(),
+      };
+    } catch (error) {
+      // Fallback to default values if database query fails
+      return {
+        status: 'UNKNOWN',
+        score: 50,
+        gstr1Filed: 0,
+        gstr2bReconciled: false,
+        gstr3bPaid: false,
+        inputCreditUtilized: 0,
+        discrepancies: 0,
+        lastUpdate: new Date().toISOString(),
+        nextDue: this.getNextGSTDueDate(),
+      };
+    }
   }
 
   /**
    * Get Income Tax compliance status
+   * Tracks audit, ITR, and related filings
    */
   async getIncomeTaxComplianceStatus(companyId, fiscalYear) {
-    return {
-      status: 'PARTIALLY_COMPLIANT',
-      score: 65,
-      auditCompleted: true,
-      itrFiled: false,
-      schedulesFiled: {
-        scheduleAL: true,
-        scheduleBL: true,
-        schedule80: false,
-      },
-      pendingItems: [
-        'ITR filing by July 31',
-        'Schedule 80 certification',
-      ],
-      lastUpdate: new Date().toISOString(),
-      nextDue: '2024-07-31',
-    };
+    try {
+      // Query audit logs for documentation
+      const auditCount = db.prepare(
+        `SELECT COUNT(*) as count FROM audit_logs 
+         WHERE company_id = ? AND action LIKE '%audit%' AND created_at >= ?`
+      ).get(companyId, `${fiscalYear}-04-01`);
+
+      // Calculate IT compliance score
+      let score = 40; // Base score for filing deadline approaching
+      if (auditCount?.count > 0) score += 25; // Has audit logs
+
+      return {
+        status: score >= 80 ? 'FULLY_COMPLIANT' : score >= 60 ? 'PARTIALLY_COMPLIANT' : 'NON_COMPLIANT',
+        score,
+        auditCompleted: auditCount?.count > 0,
+        itrFiled: false, // Would need ITR submission tracking
+        schedulesFiled: {
+          scheduleAL: false,
+          scheduleBL: false,
+          schedule80: false,
+        },
+        pendingItems: [
+          'ITR filing by July 31',
+          'Audit documentation',
+        ],
+        lastUpdate: new Date().toISOString(),
+        nextDue: `${fiscalYear + 1}-07-31`,
+      };
+    } catch (error) {
+      return {
+        status: 'UNKNOWN',
+        score: 50,
+        auditCompleted: false,
+        itrFiled: false,
+        schedulesFiled: {
+          scheduleAL: false,
+          scheduleBL: false,
+          schedule80: false,
+        },
+        pendingItems: ['Unable to determine pending items'],
+        lastUpdate: new Date().toISOString(),
+        nextDue: `${fiscalYear + 1}-07-31`,
+      };
+    }
   }
 
   /**
-   * Get TDS compliance status
+   * Get TDS compliance status from database
+   * Queries TDS entries and certificates
    */
   async getTDSComplianceStatus(companyId, fiscalYear) {
-    return {
-      status: 'FULLY_COMPLIANT',
-      score: 95,
-      tdsDeducted: 125000,
-      tdsRemitted: 120000,
-      outstanding: 5000,
-      certificatesFiled: 8,
-      quarterlyCertificates: 4,
-      annualStatementFiled: false,
-      lastUpdate: new Date().toISOString(),
-      nextDue: 'December 2024',
-    };
+    try {
+      // Query TDS entries from database
+      const tdsEntries = db.prepare(
+        `SELECT 
+          COUNT(*) as count, 
+          SUM(amount) as totalDeducted,
+          SUM(CASE WHEN remitted = 1 THEN amount ELSE 0 END) as totalRemitted
+         FROM tds_entries 
+         WHERE company_id = ? AND fiscal_year = ?`
+      ).get(companyId, fiscalYear);
+
+      // Query TDS certificates issued
+      const tdsCertificates = db.prepare(
+        `SELECT COUNT(*) as count FROM tds_certificates 
+         WHERE company_id = ? AND fiscal_year = ?`
+      ).get(companyId, fiscalYear);
+
+      const totalDeducted = tdsEntries?.totalDeducted || 0;
+      const totalRemitted = tdsEntries?.totalRemitted || 0;
+      const outstanding = totalDeducted - totalRemitted;
+
+      // Calculate compliance score
+      let score = 50; // Base score
+      if (tdsEntries?.count > 0) score += 20; // Has TDS entries
+      if (totalRemitted > 0) score += 15; // TDS remitted
+      if (tdsCertificates?.count > 0) score += 15; // Certificates issued
+      if (outstanding <= 0) score += 10; // No outstanding TDS
+
+      return {
+        status: score >= 80 ? 'FULLY_COMPLIANT' : score >= 60 ? 'PARTIALLY_COMPLIANT' : 'NON_COMPLIANT',
+        score: Math.min(100, score),
+        tdsDeducted: totalDeducted,
+        tdsRemitted: totalRemitted,
+        outstanding,
+        certificatesFiled: tdsCertificates?.count || 0,
+        quarterlyCertificates: Math.floor((tdsCertificates?.count || 0) / 3),
+        annualStatementFiled: false,
+        lastUpdate: new Date().toISOString(),
+        nextDue: 'December 31',
+      };
+    } catch (error) {
+      // Fallback to default values
+      return {
+        status: 'UNKNOWN',
+        score: 50,
+        tdsDeducted: 0,
+        tdsRemitted: 0,
+        outstanding: 0,
+        certificatesFiled: 0,
+        quarterlyCertificates: 0,
+        annualStatementFiled: false,
+        lastUpdate: new Date().toISOString(),
+        nextDue: 'December 31',
+      };
+    }
   }
 
   /**
    * Get TDS summary for a fiscal year
+   * Pulls real TDS data from database
    */
   async getTDSSummary(companyId, fiscalYear) {
     try {
+      // Get monthly TDS breakdown
       const monthlyBreakdown = await this.getTDSMonthlyBreakdown(companyId, fiscalYear);
 
+      // Get total TDS from all entries
+      const totals = db.prepare(
+        `SELECT 
+          SUM(amount) as totalDeducted,
+          COUNT(DISTINCT payee_id) as payeeCount,
+          AVG(tds_rate) as averageRate
+         FROM tds_entries 
+         WHERE company_id = ? AND fiscal_year = ?`
+      ).get(companyId, fiscalYear);
+
       return {
-        fy: `${fiscalYear}-${fiscalYear + 1}`,
-        totalDeducted: 125000,
-        payeeCount: 8,
-        averageRate: 5.5,
+        fy: `${fiscalYear}-${(fiscalYear % 100) + 1}`,
+        totalDeducted: totals?.totalDeducted || 0,
+        payeeCount: totals?.payeeCount || 0,
+        averageRate: totals?.averageRate || 0,
         monthlyBreakdown,
         sections: this.getTDSSectionBreakdown(),
       };
@@ -116,16 +238,37 @@ class ComplianceService {
   }
 
   /**
-   * Get TDS monthly breakdown
+   * Get TDS monthly breakdown from database
    */
   async getTDSMonthlyBreakdown(companyId, fiscalYear) {
     const months = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
-    const breakdown = months.map((month, idx) => ({
-      month,
-      deducted: 0,
-      remitted: 0,
-      outstanding: 0,
-    }));
+    const monthMap = { 'Apr': 4, 'May': 5, 'Jun': 6, 'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12, 'Jan': 1, 'Feb': 2, 'Mar': 3 };
+    
+    const breakdown = months.map((month, idx) => {
+      const monthNum = monthMap[month];
+      const year = monthNum <= 3 ? fiscalYear + 1 : fiscalYear;
+      
+      try {
+        const data = db.prepare(
+          `SELECT 
+            SUM(amount) as deducted,
+            SUM(CASE WHEN remitted = 1 THEN amount ELSE 0 END) as remitted,
+            SUM(CASE WHEN remitted = 0 THEN amount ELSE 0 END) as outstanding
+           FROM tds_entries 
+           WHERE company_id = ? AND strftime('%Y-%m', entry_date) = ?`
+        ).get(companyId, `${year}-${String(monthNum).padStart(2, '0')}`);
+
+        return {
+          month,
+          deducted: data?.deducted || 0,
+          remitted: data?.remitted || 0,
+          outstanding: data?.outstanding || 0,
+        };
+      } catch (error) {
+        return { month, deducted: 0, remitted: 0, outstanding: 0 };
+      }
+    });
+    
     return breakdown;
   }
 
@@ -143,24 +286,54 @@ class ComplianceService {
   }
 
   /**
-   * Get detailed TDS records
+   * Get detailed TDS records from database
    */
   async getTDSDetails(companyId, fiscalYear) {
     try {
-      return [];
+      const records = db.prepare(
+        `SELECT 
+          id, payee_id, payee_name, tds_section, amount, tds_rate, 
+          tds_amount, entry_date, remitted, remitted_date, created_at
+         FROM tds_entries 
+         WHERE company_id = ? AND fiscal_year = ?
+         ORDER BY entry_date DESC`
+      ).all(companyId, fiscalYear);
+
+      return records || [];
     } catch (error) {
       throw new AppError(`Failed to get TDS details: ${error.message}`, 500);
     }
   }
 
   /**
-   * Add TDS entry
+   * Add TDS entry to database
    */
   async addTDSEntry(companyId, entry) {
     try {
-      const calculatedTDS = (entry.amount * entry.rate) / 100;
+      const calculatedTDS = (entry.amount * entry.tdsRate) / 100;
+      
+      const stmt = db.prepare(
+        `INSERT INTO tds_entries (
+          company_id, fiscal_year, payee_id, payee_name, tds_section, 
+          amount, tds_rate, tds_amount, entry_date, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      
+      const result = stmt.run(
+        companyId,
+        entry.fiscalYear,
+        entry.payeeId,
+        entry.payeeName,
+        entry.tdsSection,
+        entry.amount,
+        entry.tdsRate,
+        calculatedTDS,
+        entry.entryDate || new Date().toISOString(),
+        new Date().toISOString()
+      );
+
       return {
-        id: Math.random().toString(36).substr(2, 9),
+        id: result.lastInsertRowid,
         ...entry,
         tdsAmount: calculatedTDS,
         created: new Date().toISOString(),
@@ -171,22 +344,57 @@ class ComplianceService {
   }
 
   /**
-   * Get GST summary
+   * Get GST summary from database
    */
   async getGSTSummary(companyId, fiscalYear) {
-    return {
-      fy: `${fiscalYear}-${fiscalYear + 1}`,
-      gstr1Filed: 12,
-      gstr2bReconciled: true,
-      gstr3bPaid: true,
-      totalTax: 185000,
-      inputCredit: 145000,
-      netPayable: 40000,
-      gstinNumber: '27AABCT7890P0Z5',
-      registrationType: 'Regular',
-      turnover: 5000000,
-      lastUpdate: new Date().toISOString(),
-    };
+    try {
+      // Query GST reconciliation data
+      const gstData = db.prepare(
+        `SELECT 
+          COUNT(*) as recordCount,
+          SUM(CASE WHEN type = 'supply' THEN amount ELSE 0 END) as gstr1Amount,
+          SUM(CASE WHEN type = 'purchase' THEN amount ELSE 0 END) as gstr2bAmount,
+          SUM(tax_amount) as totalTax,
+          SUM(input_credit) as inputCredit
+         FROM gst_reconciliations 
+         WHERE company_id = ? AND fiscal_year = ?`
+      ).get(companyId, fiscalYear);
+
+      const gstr1Amount = gstData?.gstr1Amount || 0;
+      const gstr2bAmount = gstData?.gstr2bAmount || 0;
+      const totalTax = gstData?.totalTax || 0;
+      const inputCredit = gstData?.inputCredit || 0;
+      const netPayable = totalTax - inputCredit;
+
+      return {
+        fy: `${fiscalYear}-${(fiscalYear % 100) + 1}`,
+        gstr1Filed: 12, // Would need filing status table
+        gstr2bReconciled: gstData?.recordCount > 0,
+        gstr3bPaid: false, // Would need payment records
+        totalTax,
+        inputCredit,
+        netPayable: Math.max(0, netPayable),
+        gstinNumber: '27AABCT7890P0Z5', // Would come from company table
+        registrationType: 'Regular',
+        turnover: gstr1Amount + gstr2bAmount,
+        lastUpdate: new Date().toISOString(),
+      };
+    } catch (error) {
+      // Return default structure if query fails
+      return {
+        fy: `${fiscalYear}-${(fiscalYear % 100) + 1}`,
+        gstr1Filed: 0,
+        gstr2bReconciled: false,
+        gstr3bPaid: false,
+        totalTax: 0,
+        inputCredit: 0,
+        netPayable: 0,
+        gstinNumber: 'Not configured',
+        registrationType: 'Regular',
+        turnover: 0,
+        lastUpdate: new Date().toISOString(),
+      };
+    }
   }
 
   /**

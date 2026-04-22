@@ -2,14 +2,63 @@ import React, { useState, useEffect } from 'react';
 import ComplianceScorecard from './ComplianceScorecard';
 import TDSManager from './TDSManager';
 import ComplianceChecklist from './ComplianceChecklist';
+import {
+  generateComplianceScorecard,
+  getTDSSummary,
+  getGSTSummary,
+  getComplianceChecklist,
+} from '../utils/api';
 
 export default function ComplianceHub({ companyData }) {
   const [activeTab, setActiveTab] = useState('scorecard');
   const [selectedFY, setSelectedFY] = useState(new Date().getFullYear());
   const [isLoading, setIsLoading] = useState(false);
+  const [scorecard, setScorecard] = useState(null);
+  const [tdsSummary, setTdsSummary] = useState(null);
+  const [gstSummary, setGstSummary] = useState(null);
+  const [checklist, setChecklist] = useState(null);
+  const [error, setError] = useState(null);
 
   const currentYear = new Date().getFullYear();
   const fiscalYears = Array.from({ length: 5 }, (_, i) => currentYear - i);
+  
+  // Default company ID if not provided
+  const companyId = companyData?.id || 'default-company';
+
+  // Fetch compliance data when FY or tab changes
+  useEffect(() => {
+    const fetchComplianceData = async () => {
+      if (!companyId) return;
+      
+      try {
+        setIsLoading(true);
+        setError(null);
+
+        // Fetch scorecard
+        const scorecardData = await generateComplianceScorecard(companyId, selectedFY);
+        setScorecard(scorecardData);
+
+        // Fetch TDS summary
+        const tdsData = await getTDSSummary(companyId, selectedFY);
+        setTdsSummary(tdsData);
+
+        // Fetch GST summary
+        const gstData = await getGSTSummary(companyId, selectedFY);
+        setGstSummary(gstData);
+
+        // Fetch checklist
+        const checklistData = await getComplianceChecklist(companyId, selectedFY);
+        setChecklist(checklistData);
+      } catch (err) {
+        console.error('Error fetching compliance data:', err);
+        setError(err.message);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchComplianceData();
+  }, [selectedFY, companyId]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50/50 via-white to-indigo-50/50">
@@ -72,6 +121,12 @@ export default function ComplianceHub({ companyData }) {
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 py-8">
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-red-700">{error}</p>
+          </div>
+        )}
+
         {isLoading && (
           <div className="flex items-center justify-center py-12">
             <div className="text-center">
@@ -85,13 +140,22 @@ export default function ComplianceHub({ companyData }) {
           <>
             {activeTab === 'scorecard' && (
               <div className="animate-fadeIn">
-                <ComplianceScorecard companyData={companyData} />
+                <ComplianceScorecard 
+                  companyData={companyData} 
+                  scorecard={scorecard}
+                  tdsSummary={tdsSummary}
+                  gstSummary={gstSummary}
+                />
               </div>
             )}
 
             {activeTab === 'tds' && (
               <div className="animate-fadeIn">
-                <TDSManager year={selectedFY} />
+                <TDSManager 
+                  year={selectedFY}
+                  companyId={companyId}
+                  tdsSummary={tdsSummary}
+                />
               </div>
             )}
 
@@ -99,6 +163,9 @@ export default function ComplianceHub({ companyData }) {
               <div className="animate-fadeIn">
                 <ComplianceChecklist
                   companyData={companyData}
+                  checklist={checklist}
+                  companyId={companyId}
+                  fiscalYear={selectedFY}
                   onUpdate={(category, taskId) => {
                     console.log(`Updated: ${category} - ${taskId}`);
                   }}

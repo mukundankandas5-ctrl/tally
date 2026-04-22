@@ -3,6 +3,7 @@ import {
   ArrowLeftToLine,
   ArrowRightToLine,
   Bell,
+  Briefcase,
   Building2,
   Check,
   ChevronDown,
@@ -69,6 +70,7 @@ import { OnboardingWizard } from "./components/OnboardingWizard";
 
 const AnalyticsDashboard = lazy(() => import("./components/AnalyticsDashboard"));
 const AccountMapperDashboard = lazy(() => import("./components/AccountMapperDashboard"));
+const ComplianceHub = lazy(() => import("./components/ComplianceHub"));
 const DuplicateDetectionPanel = lazy(() => import("./components/DuplicateDetectionPanel"));
 const ExportValidationPanel = lazy(() => import("./components/ExportValidationPanel"));
 const ReconciliationTracker = lazy(() => import("./components/ReconciliationTracker"));
@@ -86,6 +88,7 @@ const navigation = [
   { id: "invoice", label: "Invoice Processor", icon: Receipt },
   { id: "recommendations", label: "Speedy Recommendations", icon: Sparkles },
   { id: "gst", label: "GST Reconciliation", icon: ShieldCheck },
+  { id: "compliance", label: "Compliance Hub", icon: Briefcase },
   { id: "history", label: "History", icon: History },
   { id: "settings", label: "Settings", icon: Settings },
 ];
@@ -251,7 +254,7 @@ function normalizeBankRows(statement) {
     confidenceScore: normalizeConfidenceScore(row.confidence, row.confidenceLabel),
     confidence: row.confidenceLabel || (typeof row.confidence === "string" ? row.confidence : confidenceLabelFromScore(normalizeConfidenceScore(row.confidence, row.confidenceLabel))),
     date: row.date,
-    particulars: row.narration,
+    particulars: row.narration || "",
     amount: Number(row.debit || row.credit || 0),
     debit: Number(row.debit || 0),
     credit: Number(row.credit || 0),
@@ -376,7 +379,7 @@ function buildSpeedyGroups(rows) {
   const groups = new Map();
 
   rows.forEach((row) => {
-    const signature = createGroupingSignature(row.particulars) || row.particulars.toLowerCase().slice(0, 20) || row.id;
+    const signature = createGroupingSignature(row.particulars) || (row.particulars || "").toLowerCase().slice(0, 20) || row.id;
     const key = `${signature}__${row.voucherType}`;
     const existing = groups.get(key) || {
       id: key,
@@ -411,10 +414,10 @@ function getVisibleRows(rows, filters) {
     const query = filters.search.trim().toLowerCase();
     const matchesQuery =
       !query ||
-      row.particulars.toLowerCase().includes(query) ||
+      (row.particulars || "").toLowerCase().includes(query) ||
       String(row.category || "").toLowerCase().includes(query) ||
-      row.ledger.toLowerCase().includes(query) ||
-      row.voucherType.toLowerCase().includes(query);
+      (row.ledger || "").toLowerCase().includes(query) ||
+      (row.voucherType || "").toLowerCase().includes(query);
     const matchesStatus = filters.status === "all" || row.status === filters.status;
     const matchesVoucher = filters.voucherType === "all" || row.voucherType === filters.voucherType;
     const confidenceBucket =
@@ -3195,6 +3198,12 @@ export default function App() {
 
             {activePage === "gst" ? (
               <GstPage report={gstReport} onReconcile={handleReconcile} />
+            ) : null}
+
+            {activePage === "compliance" ? (
+              <Suspense fallback={<AddOnLoadingCard />}>
+                <ComplianceHub />
+              </Suspense>
             ) : null}
 
             {activePage === "history" ? (

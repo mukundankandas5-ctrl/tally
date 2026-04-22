@@ -544,3 +544,64 @@ export async function detectAnomalies(transaction) {
 export async function getMLMetrics() {
   return fetchJson("/api/ml-classify/metrics");
 }
+
+export async function validateMLBatch(classifications = []) {
+  return fetchJson("/api/ml-classify/validate-batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ classifications }),
+  });
+}
+
+// Compliance APIs
+export async function generateComplianceScorecard(companyId, fiscalYear) {
+  return postJson("/api/compliance/scorecard", { companyId, fiscalYear });
+}
+
+export async function getTDSSummary(companyId, fiscalYear) {
+  return fetchJson(`/api/compliance/tds-summary/${companyId}/${fiscalYear}`);
+}
+
+export async function getTDSDetails(companyId, fiscalYear) {
+  return fetchJson(`/api/compliance/tds-details/${companyId}/${fiscalYear}`);
+}
+
+export async function addTDSEntry(companyId, entry) {
+  return postJson("/api/compliance/tds-entry", { companyId, entry });
+}
+
+export async function getGSTSummary(companyId, fiscalYear) {
+  return fetchJson(`/api/compliance/gst-summary/${companyId}/${fiscalYear}`);
+}
+
+export async function getComplianceChecklist(companyId, fiscalYear) {
+  return fetchJson(`/api/compliance/checklist/${companyId}/${fiscalYear}`);
+}
+
+export async function updateChecklistTask(taskId, updates) {
+  return fetchJson(`/api/compliance/checklist/${taskId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function getUpcomingDueDates(companyId, month) {
+  return fetchJson(`/api/compliance/due-dates/${companyId}/${month}`);
+}
+
+export async function getComplianceAlerts(companyId) {
+  return fetchJson(`/api/compliance/alerts/${companyId}`);
+}
+
+export async function performGSTReconciliation(companyId, fiscalYear) {
+  return postJson("/api/compliance/gst-reconciliation", { companyId, fiscalYear });
+}
+
+export async function generateTDSCertificate(companyId, payeeId, fiscalYear) {
+  return postJson("/api/compliance/tds-certificate", { companyId, payeeId, fiscalYear });
+}
+
+export async function getComplianceAuditTrail(companyId, fiscalYear) {
+  return fetchJson(`/api/compliance/audit-trail/${companyId}/${fiscalYear}`);
+}

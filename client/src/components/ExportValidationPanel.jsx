@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { validateForExport } from "../utils/api";
+import { validateForExport, validateMLBatch } from "../utils/api";
 import SectionCard from "./SectionCard";
 
 export default function ExportValidationPanel({
@@ -17,12 +17,15 @@ export default function ExportValidationPanel({
     setLoading(true);
     setError(null);
     try {
-      const result = await validateForExport(analysisId, config?.ledgerHeads || []);
+      // Use ML batch validation instead of legacy validation
+      const result = await validateMLBatch(transactions);
       if (result.success) {
         setValidations(result);
         if (onValidationComplete) {
           onValidationComplete(result);
         }
+      } else {
+        setError(result.error || "Validation failed");
       }
     } catch (err) {
       setError(err.message);
@@ -36,14 +39,14 @@ export default function ExportValidationPanel({
       <SectionCard title="Pre-Export Validation">
         <div className="space-y-4">
           <p className="text-sm text-gray-600">
-            Validate transactions before exporting to Tally
+            Validate transactions before exporting to Tally. This will check ML confidence, anomalies, and export readiness.
           </p>
           <button
             onClick={handleValidate}
-            disabled={loading || !analysisId}
+            disabled={loading || !transactions || transactions.length === 0}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
           >
-            {loading ? "Validating..." : "Run Validation"}
+            {loading ? "Validating..." : "Run ML Validation"}
           </button>
           {error && (
             <div className="p-3 bg-red-100 text-red-700 rounded-lg text-sm">
@@ -55,168 +58,73 @@ export default function ExportValidationPanel({
     );
   }
 
-  const issues = validations?.details?.issues || [];
-  const errorCount = issues.filter(
-    (i) => i.severity === "error"
-  ).length;
-  const warningCount = issues.filter(
-    (i) => i.severity === "warning"
-  ).length;
-  const infoCount = issues.filter(
-    (i) => i.severity === "info"
-  ).length;
-
-  const issuesByType = (severity) =>
-    issues.filter((i) => i.severity === severity);
-
-  const getSeverityColor = (severity) => {
-    switch (severity) {
-      case "error":
-        return "bg-red-50 border-red-200";
-      case "warning":
-        return "bg-yellow-50 border-yellow-200";
-      default:
-        return "bg-blue-50 border-blue-200";
-    }
-  };
-
-  const getSeverityTextColor = (severity) => {
-    switch (severity) {
-      case "error":
-        return "text-red-700";
-      case "warning":
-        return "text-yellow-700";
-      default:
-        return "text-blue-700";
-    }
-  };
-
-  const canExport = errorCount === 0;
+  // ML validation summary
+  const summary = validations.validationSummary || {};
+  const recommendations = validations.recommendations || [];
+  const requiresReview = validations.requiresReview || [];
 
   return (
-    <SectionCard
-      title="Pre-Export Validation Results"
-      className={
-        canExport
-          ? "border-green-200 bg-green-50"
-          : "border-red-200 bg-red-50"
-      }
-    >
+    <SectionCard title="ML Batch Validation Results" className="border-teal-200 bg-teal-50">
       <div className="space-y-4">
-        {/* Summary Stats */}
-        <div className="grid grid-cols-3 gap-4">
-          {errorCount > 0 && (
-            <div className="p-3 bg-red-100 rounded-lg">
-              <p className="text-red-900 font-semibold">{errorCount} Errors</p>
-              <p className="text-red-700 text-xs">Must fix before export</p>
-            </div>
-          )}
-          {warningCount > 0 && (
-            <div className="p-3 bg-yellow-100 rounded-lg">
-              <p className="text-yellow-900 font-semibold">
-                {warningCount} Warnings
-              </p>
-              <p className="text-yellow-700 text-xs">Review recommended</p>
-            </div>
-          )}
-          {infoCount > 0 && (
-            <div className="p-3 bg-blue-100 rounded-lg">
-              <p className="text-blue-900 font-semibold">{infoCount} Info</p>
-              <p className="text-blue-700 text-xs">FYI items</p>
-            </div>
-          )}
-          {errorCount === 0 && warningCount === 0 && infoCount === 0 && (
-            <div className="p-3 bg-green-100 rounded-lg col-span-3">
-              <p className="text-green-900 font-semibold">✓ All checks passed!</p>
-              <p className="text-green-700 text-xs">Ready to export</p>
-            </div>
-          )}
+        {/* Confidence Distribution */}
+        <div className="grid grid-cols-4 gap-4">
+          <div className="p-3 bg-emerald-100 rounded-lg">
+            <p className="text-emerald-900 font-semibold">{summary.highConfidence || 0}</p>
+            <p className="text-emerald-700 text-xs">High Confidence</p>
+          </div>
+          <div className="p-3 bg-amber-100 rounded-lg">
+            <p className="text-amber-900 font-semibold">{summary.mediumConfidence || 0}</p>
+            <p className="text-amber-700 text-xs">Medium Confidence</p>
+          </div>
+          <div className="p-3 bg-rose-100 rounded-lg">
+            <p className="text-rose-900 font-semibold">{summary.lowConfidence || 0}</p>
+            <p className="text-rose-700 text-xs">Low Confidence</p>
+          </div>
+          <div className="p-3 bg-blue-100 rounded-lg">
+            <p className="text-blue-900 font-semibold">{summary.withAnomalies || 0}</p>
+            <p className="text-blue-700 text-xs">Anomalies</p>
+          </div>
         </div>
 
-        {/* Issues by Severity */}
-        {["error", "warning", "info"].map((severity) => {
-          const issues = issuesByType(severity);
-          if (issues.length === 0) return null;
-
-          return (
-            <div key={severity} className="space-y-2">
-              <h3 className="text-sm font-semibold capitalize text-gray-700">
-                {severity === "error"
-                  ? "Errors"
-                  : severity === "warning"
-                    ? "Warnings"
-                    : "Information"}
-              </h3>
-              <div className="space-y-2">
-                {issues.map((issue, idx) => (
-                  <div
-                    key={idx}
-                    className={`border rounded-lg p-3 ${getSeverityColor(
-                      severity
-                    )}`}
-                  >
-                    <div
-                      className="flex justify-between items-start cursor-pointer"
-                      onClick={() =>
-                        setExpandedIssue(
-                          expandedIssue === idx ? null : idx
-                        )
-                      }
-                    >
-                      <div className="flex-1">
-                        <p
-                          className={`text-sm font-semibold ${getSeverityTextColor(
-                            severity
-                          )}`}
-                        >
-                          {issue.type}
-                        </p>
-                        {issue.transactionCount > 0 && (
-                          <p
-                            className={`text-xs mt-1 ${getSeverityTextColor(
-                              severity
-                            )}`}
-                          >
-                            Affects {issue.transactionCount} transaction
-                            {issue.transactionCount !== 1 ? "s" : ""}
-                          </p>
-                        )}
-                      </div>
-                      <span className="text-gray-400">
-                        {expandedIssue === idx ? "−" : "+"}
-                      </span>
-                    </div>
-
-                    {expandedIssue === idx && (
-                      <div className="mt-2 text-xs text-gray-700 bg-white bg-opacity-50 p-2 rounded">
-                        <p>{issue.message}</p>
-                        {issue.suggestion && (
-                          <p className="mt-1 italic text-gray-600">
-                            💡 {issue.suggestion}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-
-        {/* Export Button */}
-        <div className="pt-4 border-t">
-          <button
-            disabled={!canExport}
-            className={`w-full px-4 py-2 rounded-lg font-semibold transition ${
-              canExport
-                ? "bg-green-600 text-white hover:bg-green-700"
-                : "bg-gray-300 text-gray-600 cursor-not-allowed"
-            }`}
-          >
-            {canExport ? "✓ Ready to Export" : "Fix Errors to Export"}
-          </button>
+        {/* Export Readiness */}
+        <div className="p-3 bg-white border border-teal-200 rounded-lg">
+          <p className="text-teal-900 font-semibold">{validations.exportReadiness}</p>
         </div>
+
+        {/* Recommendations */}
+        <div className="space-y-2">
+          {recommendations.map((rec, idx) => (
+            <div key={idx} className={`rounded-lg px-3 py-2 text-sm font-medium border ${
+              rec.severity === "high"
+                ? "bg-rose-50 text-rose-800 border-rose-200"
+                : rec.severity === "medium"
+                  ? "bg-amber-50 text-amber-800 border-amber-200"
+                  : "bg-emerald-50 text-emerald-800 border-emerald-200"
+            }`}>
+              {rec.message}
+            </div>
+          ))}
+        </div>
+
+        {/* Transactions Requiring Review */}
+        {requiresReview.length > 0 && (
+          <div className="mt-4">
+            <h3 className="text-sm font-semibold text-rose-900 mb-2">
+              Transactions Requiring Review
+            </h3>
+            <div className="max-h-48 overflow-y-auto space-y-2">
+              {requiresReview.map((tx, idx) => (
+                <div key={idx} className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-xs">
+                  <span className="font-semibold">ID:</span> {tx.transaction_id || tx.id} |{" "}
+                  <span className="font-semibold">Confidence:</span> {Math.round((tx.confidence || 0) * 100)}%
+                  {tx.anomalies?.isAnomalous && (
+                    <span className="ml-2 text-rose-700 font-semibold">Anomaly Detected</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </SectionCard>
   );

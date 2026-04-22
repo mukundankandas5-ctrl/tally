@@ -253,6 +253,76 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_tally_reconciliation_analysis ON tally_reconciliation(analysis_id);
   CREATE INDEX IF NOT EXISTS idx_user_assignments_analysis ON user_assignments(analysis_id);
   CREATE INDEX IF NOT EXISTS idx_audit_logs_analysis ON audit_logs(analysis_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS tds_entries (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL,
+    fiscal_year INTEGER NOT NULL,
+    payee_id TEXT,
+    payee_name TEXT NOT NULL,
+    tds_section TEXT NOT NULL,
+    amount REAL NOT NULL,
+    tds_rate REAL NOT NULL,
+    tds_amount REAL NOT NULL,
+    entry_date TEXT NOT NULL,
+    remitted INTEGER DEFAULT 0,
+    remitted_date TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS tds_certificates (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL,
+    fiscal_year INTEGER NOT NULL,
+    form_number TEXT NOT NULL,
+    payee_id TEXT,
+    payee_name TEXT NOT NULL,
+    total_amount REAL,
+    total_deducted REAL,
+    certificate_date TEXT,
+    issued_date TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS gst_reconciliations (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL,
+    fiscal_year INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    tax_amount REAL,
+    input_credit REAL,
+    reconciliation_date TEXT,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS compliance_checklists (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL,
+    fiscal_year INTEGER NOT NULL,
+    category TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    task_name TEXT NOT NULL,
+    priority TEXT NOT NULL,
+    due_date TEXT,
+    completed INTEGER DEFAULT 0,
+    completed_date TEXT,
+    assigned_to TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company_id, fiscal_year, task_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_tds_entries_company_fy ON tds_entries(company_id, fiscal_year);
+  CREATE INDEX IF NOT EXISTS idx_tds_entries_date ON tds_entries(entry_date);
+  CREATE INDEX IF NOT EXISTS idx_tds_certificates_company_fy ON tds_certificates(company_id, fiscal_year);
+  CREATE INDEX IF NOT EXISTS idx_gst_reconciliations_company_fy ON gst_reconciliations(company_id, fiscal_year);
+  CREATE INDEX IF NOT EXISTS idx_compliance_checklists_company_fy ON compliance_checklists(company_id, fiscal_year);
+  CREATE INDEX IF NOT EXISTS idx_compliance_checklists_category ON compliance_checklists(category);
 `);
 
 try {
