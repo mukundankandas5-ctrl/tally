@@ -261,6 +261,26 @@ export async function fetchSyncHistory() {
   return apiRequest("/api/activity/sync-history", { method: "GET" });
 }
 
+export async function saveAnalysisHistoryItem(payload) {
+  return fetchJson("/api/history", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listAnalysisHistory({ clientId = null, type = null, limit = 100 } = {}) {
+  const params = new URLSearchParams();
+  if (clientId) params.append("clientId", clientId);
+  if (type) params.append("type", type);
+  params.append("limit", String(limit));
+  return fetchJson(`/api/history?${params.toString()}`);
+}
+
+export async function getAnalysisHistoryItem(id) {
+  return fetchJson(`/api/history/${id}`);
+}
+
 export async function downloadGstWorkbook(payload) {
   const response = await postJson("/api/gst/export", payload);
   return response.blob();
@@ -276,6 +296,12 @@ export async function testTallyConnection(config) {
 
 export async function createPairingCode() {
   return fetchJson("/api/pair-device", {
+    method: "POST",
+  });
+}
+
+export async function syncLedgersFromTally() {
+  return fetchJson("/api/sync-ledgers", {
     method: "POST",
   });
 }

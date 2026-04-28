@@ -34,6 +34,8 @@ import {
   createClient,
   createPairingCode,
   createDocumentRequest,
+  downloadBankStatementXml,
+  downloadInvoiceXml,
   downloadRecommendationXml,
   fetchActivity,
   fetchClients,
@@ -43,7 +45,10 @@ import {
   fetchSyncHistory,
   fetchTallyStatus,
   getMappingRules,
+  getAnalysisHistoryItem,
+  listAnalysisHistory,
   saveBankStatementAnalysis,
+  saveAnalysisHistoryItem,
   learnBankStatement,
   loginUser,
   pushBankStatementToTally,
@@ -57,6 +62,7 @@ import {
   reviseInvoice,
   reviseRecommendations,
   signupUser,
+  syncLedgersFromTally,
   testTallyConnection,
   uploadBankStatementsBulk,
   uploadBankStatement,
@@ -1553,6 +1559,7 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [activity, setActivity] = useState([]);
   const [syncHistory, setSyncHistory] = useState([]);
+  const [analysisHistory, setAnalysisHistory] = useState([]);
   const [syncingLedgers, setSyncingLedgers] = useState(false);
 
   const [bankStatement, setBankStatement] = useState(createEmptyBankStatement());
@@ -1651,8 +1658,8 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([fetchLedgers(), fetchClients(), fetchTallyStatus(), fetchDocumentRequests(), fetchActivity(), fetchSyncHistory(), fetchAuthUsers()])
-      .then(([ledgerPayload, clientPayload, tallyPayload, requestPayload, activityPayload, syncPayload, usersPayload]) => {
+    Promise.all([fetchLedgers(), fetchClients(), fetchTallyStatus(), fetchDocumentRequests(), fetchActivity(), fetchSyncHistory(), fetchAuthUsers(), listAnalysisHistory()])
+      .then(([ledgerPayload, clientPayload, tallyPayload, requestPayload, activityPayload, syncPayload, usersPayload, historyPayload]) => {
         if (!active) return;
         setLedgerHeads(ledgerPayload.ledgerHeads || []);
         const nextClients = clientPayload.clients || [];
@@ -1661,6 +1668,7 @@ export default function App() {
         setDocumentRequests(requestPayload.requests || []);
         setActivity(activityPayload || []);
         setSyncHistory(syncPayload || []);
+        setAnalysisHistory(historyPayload.items || []);
         setTallyStatus(tallyPayload);
         setSettingsForm((current) => ({
           ...current,
@@ -1677,6 +1685,13 @@ export default function App() {
           ...current,
           clientId: current.clientId || nextClients[0]?.id || "",
         }));
+
+        const lastHistoryId = window.localStorage.getItem("tally-ai-last-history-id");
+        if (lastHistoryId && (historyPayload.items || []).some((item) => item.id === lastHistoryId)) {
+          openSavedAnalysis(lastHistoryId).catch(() => {
+            window.localStorage.removeItem("tally-ai-last-history-id");
+          });
+        }
       })
       .catch((error) => {
         if (!active) return;
@@ -1812,6 +1827,101 @@ export default function App() {
     const payload = await saveBankStatementAnalysis(nextStatement || buildCurrentBankStatement(), bankAnalysisId || null);
     setBankAnalysisId(payload.id);
     return payload.id;
+  }
+
+  function buildHistorySummary(type, resultData) {
+    if (type === "bank") {
+      return {
+        transactions: resultData?.transactions?.length || 0,
+        totalDebits: resultData?.summary?.totalDebits || 0,
+        totalCredits: resultData?.summary?.totalCredits || 0,
+        reviewCount: resultData?.summary?.reviewCount || 0,
+        periodStart: resultData?.summary?.periodStart || "",
+        periodEnd: resultData?.summary?.periodEnd || "",
+      };
+    }
+    if (type === "invoice") {
+      return {
+        invoiceNumber: resultData?.invoiceNumber || "",
+        vendorName: resultData?.vendorName || "",
+        total: resultData?.total || 0,
+        confidence: resultData?.confidence || "",
+      };
+    }
+    if (type === "recommendations") {
+      return {
+        rows: resultData?.mappings?.length || 0,
+        needsReview: resultData?.summary?.needsReviewCount || 0,
+        accepted: resultData?.summary?.acceptedCount || 0,
+      };
+    }
+    if (type === "gst") {
+      return {
+        total: resultData?.summary?.total || 0,
+        matched: resultData?.summary?.matched || 0,
+        partial: resultData?.summary?.partial || 0,
+        unmatched: resultData?.summary?.unmatched || 0,
+      };
+    }
+    return {};
+  }
+
+  async function refreshAnalysisHistory() {
+    const payload = await listAnalysisHistory({ limit: 100 });
+    setAnalysisHistory(payload.items || []);
+    return payload.items || [];
+  }
+
+  async function saveResultToHistory({ type, title, sourceFileName = "", resultData, clientId = bankProcessingConfig.clientId, status = "completed" }) {
+    const payload = await saveAnalysisHistoryItem({
+      clientId: clientId || null,
+      type,
+      title,
+      sourceFileName,
+      resultData,
+      summary: buildHistorySummary(type, resultData),
+      status,
+    });
+    await refreshAnalysisHistory().catch(() => {});
+    return payload.id;
+  }
+
+  async function openSavedAnalysis(historyId) {
+    await withBusy("history-open", async () => {
+      const payload = await getAnalysisHistoryItem(historyId);
+      const item = payload.item;
+      const data = item?.resultData || {};
+
+      if (item.type === "bank") {
+        setBankStatement(data);
+        setBankRows(normalizeBankRows(data));
+        setBankAnalysisId(data.analysisId || "");
+        setBankProcessingConfig((current) => ({
+          ...current,
+          clientId: data.tallyConfig?.clientId || item.clientId || current.clientId,
+          companyName: data.tallyConfig?.companyName || current.companyName,
+          bankName: data.tallyConfig?.bankName || current.bankName,
+          bankLedgerName: data.tallyConfig?.bankLedgerName || current.bankLedgerName,
+          intervalStart: data.summary?.periodStart || current.intervalStart,
+          intervalEnd: data.summary?.periodEnd || current.intervalEnd,
+        }));
+        setActivePage("bank");
+      } else if (item.type === "invoice") {
+        setInvoice(data);
+        setInvoiceRows(normalizeInvoiceRows(data));
+        setActivePage("invoice");
+      } else if (item.type === "recommendations") {
+        setRecommendations(data);
+        setRecommendationRows(normalizeRecommendationRows(data));
+        setActivePage("recommendations");
+      } else if (item.type === "gst") {
+        setGstReport(data);
+        setActivePage("gst");
+      }
+
+      window.localStorage.setItem("tally-ai-last-history-id", historyId);
+      addToast("Saved analysis reopened.", "success");
+    });
   }
 
   function toggleRow(selected, setSelected, id) {
@@ -1996,6 +2106,18 @@ export default function App() {
         },
       });
       setBankAnalysisId(saved.id);
+      await saveResultToHistory({
+        type: "bank",
+        title: file.name || "Bank statement analysis",
+        sourceFileName: file.name,
+        resultData: {
+          ...payload,
+          analysisId: saved.id,
+          originalFileName: file.name,
+        },
+      }).then((historyId) => {
+        window.localStorage.setItem("tally-ai-last-history-id", historyId);
+      });
       setBankProcessingConfig((current) => ({
         ...current,
         bankLedgerName: payload.tallyConfig?.bankLedgerName || current.bankLedgerName,
@@ -2018,6 +2140,14 @@ export default function App() {
         setBankRows(normalizeBankRows(prepared));
         const saved = await saveBankStatementAnalysis(prepared);
         setBankAnalysisId(saved.id);
+        await saveResultToHistory({
+          type: "bank",
+          title: firstSuccess.fileName || "Bulk bank statement analysis",
+          sourceFileName: firstSuccess.fileName,
+          resultData: { ...prepared, analysisId: saved.id },
+        }).then((historyId) => {
+          window.localStorage.setItem("tally-ai-last-history-id", historyId);
+        });
       }
       addActivity(`Processed ${payload.summary?.processedFiles || 0} bulk bank files`, "Resolved");
       addToast(`Bulk run completed for ${payload.summary?.totalFiles || files.length} files.`, "success");
@@ -2029,6 +2159,14 @@ export default function App() {
       const payload = await uploadInvoice(file, bankProcessingConfig);
       setInvoice(payload);
       setInvoiceRows(normalizeInvoiceRows(payload));
+      await saveResultToHistory({
+        type: "invoice",
+        title: payload.invoiceNumber ? `Invoice ${payload.invoiceNumber}` : file.name || "Invoice extraction",
+        sourceFileName: file.name,
+        resultData: { ...payload, originalFileName: file.name },
+      }).then((historyId) => {
+        window.localStorage.setItem("tally-ai-last-history-id", historyId);
+      });
       setActivePage("invoice");
       addActivity(`Processed invoice ${payload.invoiceNumber || file.name}`, "Resolved");
     });
@@ -2039,6 +2177,14 @@ export default function App() {
       const payload = await analyzeRecommendations(file, bankProcessingConfig);
       setRecommendations(payload);
       setRecommendationRows(normalizeRecommendationRows(payload));
+      await saveResultToHistory({
+        type: "recommendations",
+        title: file.name || "Speedy recommendations",
+        sourceFileName: file.name,
+        resultData: { ...payload, originalFileName: file.name },
+      }).then((historyId) => {
+        window.localStorage.setItem("tally-ai-last-history-id", historyId);
+      });
       setActivePage("recommendations");
       addActivity(`Prepared AI suggestions from ${file.name}`, "Resolved");
     });
@@ -2079,6 +2225,12 @@ export default function App() {
         ...revised,
         originalFileName: bankStatement.originalFileName,
       });
+      await saveResultToHistory({
+        type: "bank",
+        title: revised.originalFileName || bankStatement.originalFileName || "Bank statement analysis",
+        sourceFileName: revised.originalFileName || bankStatement.originalFileName || "",
+        resultData: { ...revised, originalFileName: bankStatement.originalFileName, analysisId: bankAnalysisId },
+      }).catch(() => {});
       withFlash(nextRows.map((row) => row.id));
       addToast("Updated classifications using your instruction.", "success");
     });
@@ -2091,6 +2243,12 @@ export default function App() {
       setInvoice(revised);
       const nextRows = normalizeInvoiceRows(revised);
       setInvoiceRows(nextRows);
+      await saveResultToHistory({
+        type: "invoice",
+        title: revised.invoiceNumber ? `Invoice ${revised.invoiceNumber}` : invoice.originalFileName || "Invoice extraction",
+        sourceFileName: revised.originalFileName || invoice.originalFileName || "",
+        resultData: revised,
+      }).catch(() => {});
       withFlash(nextRows.map((row) => row.id));
       addToast("Updated invoice extraction using your instruction.", "success");
     });
@@ -2249,6 +2407,12 @@ export default function App() {
       setRecommendations(payload);
       const nextRows = normalizeRecommendationRows(payload);
       setRecommendationRows(nextRows);
+      await saveResultToHistory({
+        type: "recommendations",
+        title: payload.originalFileName || recommendations.originalFileName || "Speedy recommendations",
+        sourceFileName: payload.originalFileName || recommendations.originalFileName || "",
+        resultData: payload,
+      }).catch(() => {});
       withFlash(nextRows.map((row) => row.id));
       addToast("Updated suggestions using your instruction.", "success");
     });
@@ -2491,6 +2655,14 @@ export default function App() {
     await withBusy("gst-reconcile", async () => {
       const payload = await reconcileGst(gstr2bFile, purchaseRegisterFile);
       setGstReport(payload);
+      await saveResultToHistory({
+        type: "gst",
+        title: `GST reconciliation - ${new Date().toISOString().slice(0, 10)}`,
+        sourceFileName: [gstr2bFile?.name, purchaseRegisterFile?.name].filter(Boolean).join(" + "),
+        resultData: payload,
+      }).then((historyId) => {
+        window.localStorage.setItem("tally-ai-last-history-id", historyId);
+      });
       addToast("GST reconciliation completed.", "success");
     });
   }
@@ -2499,7 +2671,7 @@ export default function App() {
     if (syncingLedgers) return;
     setSyncingLedgers(true);
     try {
-      const result = await apiPost("/sync-ledgers");
+      const result = await syncLedgersFromTally();
       addToast({
         title: "Sync Complete",
         message: `Successfully synced ${result.count} ledgers from ${result.company}.`,
@@ -3207,7 +3379,12 @@ export default function App() {
             ) : null}
 
             {activePage === "history" ? (
-              <HistoryPage activity={activity} syncHistory={syncHistory} />
+              <HistoryPage
+                activity={activity}
+                syncHistory={syncHistory}
+                analysisHistory={analysisHistory}
+                onOpenAnalysis={openSavedAnalysis}
+              />
             ) : null}
 
             {activePage === "settings" ? (
@@ -3330,9 +3507,52 @@ function GstPage({ report, onReconcile }) {
   );
 }
 
-function HistoryPage({ activity, syncHistory }) {
+function HistoryPage({ activity, syncHistory, analysisHistory, onOpenAnalysis }) {
+  const typeLabel = {
+    bank: "Bank",
+    invoice: "Invoice",
+    recommendations: "Speedy",
+    gst: "GST",
+  };
+
   return (
-    <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+    <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+      <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel">
+        <div className="border-b border-white/50 px-5 py-4 text-lg font-semibold">Saved Analyses</div>
+        <div className="divide-y divide-[#F3F4F6]">
+          {analysisHistory.length > 0 ? analysisHistory.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onOpenAnalysis(item.id)}
+              className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors hover:bg-white/60"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-[#EEF2FF] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#4338CA]">
+                    {typeLabel[item.type] || item.type}
+                  </span>
+                  <span className="truncate text-sm font-semibold text-[#111827]">{item.title}</span>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-[#6B7280]">
+                  <span>{formatDate(item.updatedAt || item.createdAt)}</span>
+                  {item.sourceFileName ? <span className="truncate">{item.sourceFileName}</span> : null}
+                  {item.summary?.transactions ? <span>{formatNumber(item.summary.transactions)} entries</span> : null}
+                  {item.summary?.total ? <span>{formatNumber(item.summary.total)} rows</span> : null}
+                </div>
+              </div>
+              <Badge status={item.status === "completed" ? "resolved" : "pending"} confidence="high" />
+            </button>
+          )) : (
+            <div className="p-8 flex flex-col items-center text-center">
+              <div className="rounded-full bg-[#F3F4F6] p-4 mb-3"><FileSpreadsheet className="h-6 w-6 text-[#9CA3AF]" /></div>
+              <div className="text-[15px] font-semibold text-[#111827]">No saved analyses yet</div>
+              <div className="text-sm mt-1 text-[#6B7280]">Analyzed bank statements, invoices, Speedy runs, and GST reports will appear here.</div>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel">
         <div className="border-b border-white/50 px-5 py-4 text-lg font-semibold">Recent Activity</div>
         <div className="divide-y divide-[#F3F4F6]">
@@ -3353,7 +3573,7 @@ function HistoryPage({ activity, syncHistory }) {
           )}
         </div>
       </div>
-      <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel">
+      <div className="glass-panel rounded-[28px] border border-white/70 shadow-panel xl:col-span-2">
         <div className="border-b border-white/50 px-5 py-4 text-lg font-semibold">Tally Sync History</div>
         <div className="overflow-x-auto">
           {syncHistory.length > 0 ? (

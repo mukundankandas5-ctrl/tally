@@ -246,6 +246,19 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS analysis_history (
+    id TEXT PRIMARY KEY,
+    client_id TEXT,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    source_file_name TEXT NOT NULL DEFAULT '',
+    result_data TEXT NOT NULL,
+    summary TEXT,
+    status TEXT NOT NULL DEFAULT 'completed',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE INDEX IF NOT EXISTS idx_duplicate_transactions_analysis ON duplicate_transactions(analysis_id);
   CREATE INDEX IF NOT EXISTS idx_account_mappings_client ON account_mappings(client_id, is_active);
   CREATE INDEX IF NOT EXISTS idx_export_validations_analysis ON export_validations(analysis_id);
@@ -253,6 +266,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_tally_reconciliation_analysis ON tally_reconciliation(analysis_id);
   CREATE INDEX IF NOT EXISTS idx_user_assignments_analysis ON user_assignments(analysis_id);
   CREATE INDEX IF NOT EXISTS idx_audit_logs_analysis ON audit_logs(analysis_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_analysis_history_client ON analysis_history(client_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_analysis_history_type ON analysis_history(type, created_at DESC);
 
   CREATE TABLE IF NOT EXISTS tds_entries (
     id TEXT PRIMARY KEY,
@@ -809,6 +824,96 @@ function listBankStatementAnalyses(clientId, limit = 50) {
   }));
 }
 
+function parseJsonField(value, fallback) {
+  try {
+    return JSON.parse(value || "");
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function normalizeHistoryRow(row, includeData = false) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    type: row.type,
+    title: row.title,
+    sourceFileName: row.source_file_name || "",
+    summary: parseJsonField(row.summary, {}),
+    status: row.status || "completed",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(includeData ? { resultData: parseJsonField(row.result_data, {}) } : {}),
+  };
+}
+
+function saveAnalysisHistory({ id, clientId, type, title, sourceFileName = "", resultData = {}, summary = {}, status = "completed" }) {
+  const historyId = id || `history-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const existing = db.prepare("SELECT id FROM analysis_history WHERE id = ?").get(historyId);
+
+  if (existing) {
+    db.prepare(
+      `UPDATE analysis_history
+       SET client_id = ?,
+           type = ?,
+           title = ?,
+           source_file_name = ?,
+           result_data = ?,
+           summary = ?,
+           status = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).run(
+      clientId || null,
+      type,
+      title,
+      sourceFileName || "",
+      JSON.stringify(resultData || {}),
+      JSON.stringify(summary || {}),
+      status || "completed",
+      historyId
+    );
+  } else {
+    db.prepare(
+      `INSERT INTO analysis_history (
+        id, client_id, type, title, source_file_name, result_data, summary, status, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+    ).run(
+      historyId,
+      clientId || null,
+      type,
+      title,
+      sourceFileName || "",
+      JSON.stringify(resultData || {}),
+      JSON.stringify(summary || {}),
+      status || "completed"
+    );
+  }
+
+  return historyId;
+}
+
+function listAnalysisHistory({ clientId = null, type = null, limit = 100 } = {}) {
+  const rows = db
+    .prepare(
+      `SELECT id, client_id, type, title, source_file_name, summary, status, created_at, updated_at
+       FROM analysis_history
+       WHERE (? IS NULL OR client_id = ?)
+         AND (? IS NULL OR type = ?)
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT ?`
+    )
+    .all(clientId || null, clientId || null, type || null, type || null, Number(limit || 100));
+
+  return rows.map((row) => normalizeHistoryRow(row));
+}
+
+function getAnalysisHistoryItem(id) {
+  const row = db.prepare("SELECT * FROM analysis_history WHERE id = ?").get(id);
+  return normalizeHistoryRow(row, true);
+}
+
 function saveBankStatementChange({ id, analysisId, changeType, previousState, newState, changeSummary }) {
   db.prepare(
     `INSERT INTO statement_change_history (id, analysis_id, change_type, previous_state, new_state, change_summary)
@@ -1107,4 +1212,7 @@ module.exports = {
   getAnalysisAssignees,
   recordAuditLog,
   getAuditLogs,
+  saveAnalysisHistory,
+  listAnalysisHistory,
+  getAnalysisHistoryItem,
 };
