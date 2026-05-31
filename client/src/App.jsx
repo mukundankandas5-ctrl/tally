@@ -35,6 +35,8 @@ import {
   createPairingCode,
   createDocumentRequest,
   downloadBankStatementXml,
+  downloadGstMismatchWorkbook,
+  downloadGstWorkbook,
   downloadInvoiceXml,
   downloadRecommendationXml,
   fetchActivity,
@@ -82,6 +84,7 @@ const ExportValidationPanel = lazy(() => import("./components/ExportValidationPa
 const ReconciliationTracker = lazy(() => import("./components/ReconciliationTracker"));
 const RuleDashboard = lazy(() => import("./components/RuleDashboard"));
 const UserAssignmentPanel = lazy(() => import("./components/UserAssignmentPanel"));
+const GSTR2BReconcile = lazy(() => import("./components/GSTR2BReconcile"));
 
 const SIDEBAR_WIDTH = 220;
 const SIDEBAR_COLLAPSED_WIDTH = 64;
@@ -94,6 +97,7 @@ const navigation = [
   { id: "invoice", label: "Invoice Processor", icon: Receipt },
   { id: "recommendations", label: "Speedy Recommendations", icon: Sparkles },
   { id: "gst", label: "GST Reconciliation", icon: ShieldCheck },
+  { id: "gstr2b", label: "GSTR-2B Recon", icon: FileSpreadsheet },
   { id: "compliance", label: "Compliance Hub", icon: Briefcase },
   { id: "history", label: "History", icon: History },
   { id: "settings", label: "Settings", icon: Settings },
@@ -2667,6 +2671,26 @@ export default function App() {
     });
   }
 
+  async function handleGstWorkbookDownload(scope = "full") {
+    if (!gstReport?.summary?.total) {
+      addToast("Run GST reconciliation before downloading the workbook.", "error");
+      return;
+    }
+
+    await withBusy(scope === "mismatches" ? "gst-export-mismatches" : "gst-export-full", async () => {
+      const blob =
+        scope === "mismatches"
+          ? await downloadGstMismatchWorkbook(gstReport)
+          : await downloadGstWorkbook(gstReport);
+      const filename =
+        scope === "mismatches"
+          ? `gst-mismatched-entries-${new Date().toISOString().slice(0, 10)}.xlsx`
+          : `gst-full-reconciliation-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      downloadBlob(blob, filename);
+      addToast(scope === "mismatches" ? "Mismatch workbook downloaded." : "Full reconciliation workbook downloaded.", "success");
+    });
+  }
+
   async function onSyncLedgers() {
     if (syncingLedgers) return;
     setSyncingLedgers(true);
@@ -2721,7 +2745,16 @@ export default function App() {
 
   if (!authUser.onboardingComplete) {
     return (
-      <OnboardingWizard user={authUser} onComplete={() => setAuthUser(current => ({ ...current, onboardingComplete: true }))} />
+      <OnboardingWizard 
+        user={authUser} 
+        onComplete={() => {
+          const updatedUser = { ...authUser, onboardingComplete: true };
+          setAuthUser(updatedUser);
+          // Persist to localStorage
+          const session = JSON.parse(window.localStorage.getItem("tally-ai-session") || "{}");
+          window.localStorage.setItem("tally-ai-session", JSON.stringify({ ...session, user: updatedUser }));
+        }} 
+      />
     );
   }
 
@@ -3369,7 +3402,18 @@ export default function App() {
             ) : null}
 
             {activePage === "gst" ? (
-              <GstPage report={gstReport} onReconcile={handleReconcile} />
+              <GstPage
+                report={gstReport}
+                onReconcile={handleReconcile}
+                onDownloadFull={() => handleGstWorkbookDownload("full")}
+                onDownloadMismatches={() => handleGstWorkbookDownload("mismatches")}
+              />
+            ) : null}
+
+            {activePage === "gstr2b" ? (
+              <Suspense fallback={<AddOnLoadingCard />}>
+                <GSTR2BReconcile />
+              </Suspense>
             ) : null}
 
             {activePage === "compliance" ? (
@@ -3411,11 +3455,11 @@ export default function App() {
   );
 }
 
-function GstPage({ report, onReconcile }) {
+function GstPage({ report, onReconcile, onDownloadFull, onDownloadMismatches }) {
   const [files, setFiles] = useState({ gstr2b: null, purchaseRegister: null });
   const [activeTab, setActiveTab] = useState("all");
 
-  const filteredRows = report.rows.filter(row => {
+  const filteredRows = (report.rows || []).filter(row => {
     if (activeTab === "matched") return row.status === "matched";
     if (activeTab === "mismatched") return row.status !== "matched";
     return true;
@@ -3429,6 +3473,26 @@ function GstPage({ report, onReconcile }) {
         <Button variant="primary" className="w-full justify-center" disabled={!files.gstr2b || !files.purchaseRegister} onClick={() => onReconcile(files.gstr2b, files.purchaseRegister)}>
           Reconcile
         </Button>
+        <div className="grid gap-3">
+          <Button
+            variant="outlinePurple"
+            className="w-full justify-center"
+            disabled={!report.summary.total}
+            onClick={onDownloadFull}
+          >
+            <Download className="h-4 w-4" />
+            Download Full Reconciliation
+          </Button>
+          <Button
+            variant="ghost"
+            className="w-full justify-center border border-[#FCA5A5] text-[#B91C1C] hover:bg-[#FEF2F2]"
+            disabled={!report.summary.total}
+            onClick={onDownloadMismatches}
+          >
+            <Download className="h-4 w-4" />
+            Download Mismatches Only
+          </Button>
+        </div>
         <details className="glass-panel rounded-[28px] border border-white/70 p-4 cursor-pointer group">
           <summary className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7C3AED] select-none outline-none">Supported Headers</summary>
           <div className="mt-3 space-y-2 text-[11px] text-[#6B7280]">

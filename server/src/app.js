@@ -18,6 +18,7 @@ const transactionRoutes = require("./routes/transactionRoutes");
 const complianceRoutes = require("./routes/complianceRoutes");
 const mlClassificationRoutes = require("./routes/mlClassificationRoutes");
 const historyRoutes = require("./routes/historyRoutes");
+const gstr2bRoutes = require("./routes/gstr2bRoutes");
 
 const app = express();
 
@@ -45,6 +46,7 @@ app.use("/api/gst", gstRoutes);
 app.use("/api/tally", tallyRoutes);
 app.use("/api/activity", activityRoutes);
 app.use("/api/history", historyRoutes);
+app.use("/api/reconcile", gstr2bRoutes);
 app.use("/api/compliance", complianceRoutes);
 app.use("/api/ml-classify", mlClassificationRoutes);
 app.use("/api", transactionRoutes);

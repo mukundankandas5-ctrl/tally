@@ -245,8 +245,8 @@ export async function downloadRecommendationXml(payload) {
 
 export async function reconcileGst(gstr2bFile, purchaseRegisterFile) {
   const formData = new FormData();
-  formData.append("gstr2b", gstr2bFile);
-  formData.append("purchaseRegister", purchaseRegisterFile);
+  formData.append("gstrFile", gstr2bFile);
+  formData.append("registerFile", purchaseRegisterFile);
   return apiRequest("/api/gst/reconcile", {
     method: "POST",
     body: formData,
@@ -283,6 +283,11 @@ export async function getAnalysisHistoryItem(id) {
 
 export async function downloadGstWorkbook(payload) {
   const response = await postJson("/api/gst/export", payload);
+  return response.blob();
+}
+
+export async function downloadGstMismatchWorkbook(payload) {
+  const response = await postJson("/api/gst/export-mismatches", payload);
   return response.blob();
 }
 
@@ -631,3 +636,20 @@ export async function generateTDSCertificate(companyId, payeeId, fiscalYear) {
 export async function getComplianceAuditTrail(companyId, fiscalYear) {
   return fetchJson(`/api/compliance/audit-trail/${companyId}/${fiscalYear}`);
 }
+
+export async function reconcileGstr2bFull(gstr2bFile, ledgerFiles) {
+  const form = new FormData();
+  form.append("gstr2b", gstr2bFile);
+  ledgerFiles.forEach((f) => form.append("ledgers", f));
+  return postForm("/api/reconcile/gstr2b", form);
+}
+
+export function downloadGstr2bReport(downloadUrl) {
+  const a = document.createElement("a");
+  a.href = downloadUrl;
+  a.download = "GSTR2B_Reconciliation.xlsx";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
