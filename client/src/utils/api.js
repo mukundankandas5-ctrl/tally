@@ -99,6 +99,14 @@ export async function updateOnboardingStatus(userId, status) {
   });
 }
 
+export async function loginWithGoogle(credential) {
+  return fetchJson("/api/auth/google", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential }),
+  });
+}
+
 export async function loginUser(email, password) {
   if (isSupabaseEnabled()) {
     return loginWithSupabase(email, password);

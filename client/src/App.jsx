@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { GoogleOAuthProvider, GoogleLogin } from "@react-oauth/google";
 import {
   ArrowLeftToLine,
   ArrowRightToLine,
@@ -52,6 +53,7 @@ import {
   saveBankStatementAnalysis,
   saveAnalysisHistoryItem,
   learnBankStatement,
+  loginWithGoogle,
   loginUser,
   pushBankStatementToTally,
   pushInvoiceToTally,
@@ -1967,6 +1969,20 @@ export default function App() {
     withFlash([id]);
   }
 
+  async function handleGoogleLogin({ credential }) {
+    setAuthBusy(true);
+    setAuthError("");
+    try {
+      const payload = await loginWithGoogle(credential);
+      setAuthUser(payload.user);
+      window.localStorage.setItem("tally-ai-session", JSON.stringify(payload));
+    } catch (error) {
+      setAuthError(error.message || "Google sign-in failed.");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
   async function handleSignIn(event) {
     event.preventDefault();
     setAuthBusy(true);
@@ -2727,34 +2743,40 @@ export default function App() {
 
   if (!authUser) {
     return (
-      <SignInPage
-        mode={authMode}
-        setMode={setAuthMode}
-        form={authForm}
-        setForm={setAuthForm}
-        error={authError}
-        busy={authBusy}
-        message={authMessage}
-        onSubmit={authMode === "signup" ? handleSignUp : authMode === "forgot" ? handleForgotPassword : handleSignIn}
-        showPassword={showPassword}
-        setShowPassword={setShowPassword}
-        supabaseEnabled={supabaseEnabled}
-      />
-    );
-  }
+      <GoogleOAuthProvider clientId="1043628988023-s80e9275n3b52qa3g2u2ds3qrkvi8ulv.apps.googleusercontent.com">
+        <div className="flex min-h-screen items-center justify-center bg-[#F9FAFB]">
+          <div className="w-full max-w-sm rounded-2xl border border-[#E5E7EB] bg-white p-8 shadow-[0_4px_24px_rgba(0,0,0,0.08)]">
+            <div className="mb-6 text-center">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[#7C3AED]">
+                <ShieldCheck className="h-6 w-6 text-white" />
+              </div>
+              <h1 className="text-xl font-bold text-[#111827]">Tally AI</h1>
+              <p className="mt-1 text-sm text-[#6B7280]">Private workspace — sign in to continue</p>
+            </div>
 
-  if (!authUser.onboardingComplete) {
-    return (
-      <OnboardingWizard 
-        user={authUser} 
-        onComplete={() => {
-          const updatedUser = { ...authUser, onboardingComplete: true };
-          setAuthUser(updatedUser);
-          // Persist to localStorage
-          const session = JSON.parse(window.localStorage.getItem("tally-ai-session") || "{}");
-          window.localStorage.setItem("tally-ai-session", JSON.stringify({ ...session, user: updatedUser }));
-        }} 
-      />
+            {authError && (
+              <div className="mb-4 rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-4 py-3 text-sm text-[#991B1B]">
+                {authError}
+              </div>
+            )}
+
+            <div className="flex justify-center">
+              {authBusy ? (
+                <div className="text-sm text-[#6B7280]">Signing in…</div>
+              ) : (
+                <GoogleLogin
+                  onSuccess={handleGoogleLogin}
+                  onError={() => setAuthError("Google sign-in failed. Try again.")}
+                  theme="outline"
+                  size="large"
+                  text="signin_with_google"
+                  shape="rectangular"
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      </GoogleOAuthProvider>
     );
   }
 

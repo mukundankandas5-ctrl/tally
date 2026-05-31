@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const express = require("express");
+const { OAuth2Client } = require("google-auth-library");
 const AppError = require("../utils/appError");
 const {
   createResetToken,
@@ -12,6 +13,45 @@ const {
 } = require("../db/database");
 
 const router = express.Router();
+
+const GOOGLE_CLIENT_ID = "1043628988023-s80e9275n3b52qa3g2u2ds3qrkvi8ulv.apps.googleusercontent.com";
+const ALLOWED_EMAILS = ["mukundankandas5@gmail.com", "shansundar26@gmail.com"];
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+
+// POST /api/auth/google — verify Google ID token, return session
+router.post("/google", express.json({ limit: "1mb" }), async (req, res, next) => {
+  try {
+    const { credential } = req.body || {};
+    if (!credential) throw new AppError("Missing Google credential.", 400);
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    const email = (payload.email || "").toLowerCase();
+
+    if (!ALLOWED_EMAILS.includes(email)) {
+      throw new AppError("Access denied. This workspace is private.", 403);
+    }
+
+    // Find or create user
+    let user = findUserByEmail(email);
+    if (!user) {
+      user = createUser({
+        id: payload.sub,
+        name: payload.name || email.split("@")[0],
+        email,
+        password: crypto.randomBytes(32).toString("hex"), // unusable password
+        role: "User",
+      });
+    }
+
+    res.json({ user, sessionToken: createSessionToken(user.id) });
+  } catch (error) {
+    next(error);
+  }
+});
 
 function createSessionToken(userId) {
   return `session-${userId}-${crypto.randomBytes(12).toString("hex")}`;
