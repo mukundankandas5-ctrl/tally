@@ -101,9 +101,15 @@ def parse_gstr2b(path):
     if len(rows) < 7:
         raise ValueError("B2B sheet has too few rows")
 
+    # Bug fix: real GSTR-2B B2B layout has "Invoice Value(₹)" at col 4 and
+    # "Whether RCM" at col 6 — so all indices from col 3 onwards shift left by 1
+    # vs the old (wrong) indices.
+    # Col: 0=GSTIN 1=Name 2=InvNo 3=InvDate 4=InvValue 5=PlaceOfSupply
+    #      6=RCM 7=Taxable 8=IGST 9=CGST 10=SGST 11=Cess
+    #      12=GSTR1Period 13=GSTR1FilingDate 14=ITCAvailability 15=Reason
     invoices = []
     for row in rows[6:]:
-        if not row or len(row) < 12: continue
+        if not row or len(row) < 11: continue
         gstin = _str(row[0])
         if not gstin or len(gstin) < 10: continue
 
@@ -111,13 +117,13 @@ def parse_gstr2b(path):
             'gstin':           gstin,
             'supplier_name':   _str(row[1]),
             'invoice_no':      _str(row[2]),
-            'invoice_date':    to_date_str(row[4]),
-            'taxable_value':   _flt(row[8]),
-            'igst':            _flt(row[9]),
-            'cgst':            _flt(row[10]),
-            'sgst':            _flt(row[11]),
-            'place_of_supply': _str(row[6]),
-            'itc_availability':_str(row[15]) if len(row) > 15 else '',
+            'invoice_date':    to_date_str(row[3]),
+            'taxable_value':   _flt(row[7]),
+            'igst':            _flt(row[8]),
+            'cgst':            _flt(row[9]),
+            'sgst':            _flt(row[10]),
+            'place_of_supply': _str(row[5]),
+            'itc_availability':_str(row[14]) if len(row) > 14 else '',
         }
         inv['tax_type']   = 'CGST' if gstin.startswith('33') else 'IGST'
         inv['tax_amount'] = inv['cgst'] if inv['tax_type'] == 'CGST' else inv['igst']
@@ -133,7 +139,21 @@ def parse_tally_ledger(path):
     rows = list(ws.iter_rows(values_only=True))
     if len(rows) < 9: return []
 
-    headers = [_str(h) for h in (rows[7] if len(rows) > 7 else [])]
+    # Dynamically find the real header row: the row that has "Date" in col 0
+    # AND a CGST/IGST/SGST keyword somewhere in the row.
+    # Tally exports place company info in rows 0-5, ledger name in row 6, a
+    # "Ledger Account" caption in row 7, an empty row 8, a date-range in row 9,
+    # and the real column header in row 10.  We scan to be robust across variants.
+    header_row_idx = 7  # safe fallback (old behaviour)
+    for idx in range(min(len(rows), 20)):
+        rv = [_str(v).upper() for v in (rows[idx] or [])]
+        has_date = any(v.strip() == 'DATE' for v in rv)
+        has_tax  = any(any(kw in v for kw in ['CGST','IGST','SGST']) for v in rv)
+        if has_date and has_tax:
+            header_row_idx = idx
+            break
+
+    headers = [_str(h) for h in (rows[header_row_idx] if len(rows) > header_row_idx else [])]
 
     tax_col_idx, tax_col_name = None, ''
     for i, h in enumerate(headers):
@@ -155,7 +175,7 @@ def parse_tally_ledger(path):
             tax_rate = rate; break
 
     entries = []
-    for row in rows[8:]:
+    for row in rows[header_row_idx + 1:]:
         if not row: continue
         col1 = _str(row[1] if len(row) > 1 else '')
         if 'grand total' in col1.lower(): continue
@@ -256,6 +276,19 @@ def run_parse(gstr2b_path, ledger_paths):
     all_tally = []
     for lp in ledger_paths:
         all_tally.extend(parse_tally_ledger(lp))
+
+    # Deduplicate across files: if a "combined" ledger file (e.g. cg 2.xls) is
+    # uploaded alongside the individual ones it was built from, each entry would
+    # appear twice.  Key on (date, party, narration, tax_amount, tax_type) —
+    # keeping the first occurrence preserves file attribution.
+    seen_keys: set = set()
+    deduped = []
+    for e in all_tally:
+        key = (e['date'], norm(e['party']), e['tax_amount'], e['tax_type'])
+        if key not in seen_keys:
+            seen_keys.add(key)
+            deduped.append(e)
+    all_tally = deduped
 
     all_tally_parties = [e['party'] for e in all_tally if e['party'].strip()]
 
