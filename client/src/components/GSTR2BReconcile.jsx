@@ -256,7 +256,7 @@ export default function GSTR2BReconcile() {
 
         <Dropzone
           title="Tally Ledger Files"
-          helper="Select up to 6 Tally ledger Excel files (CGST 1.5%, 2.5%, 9%, IGST 3%, 18%, etc.)"
+          helper="Select all Tally input tax ledger Excel files (CGST 2.5%, 9%, IGST 5%, 18%, SGST, etc.)"
           multiple={true}
           files={ledgerFiles}
           onSelect={setLedgerFiles}

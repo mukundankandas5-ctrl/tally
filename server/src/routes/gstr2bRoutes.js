@@ -15,7 +15,7 @@ router.post(
   "/gstr2b",
   upload.fields([
     { name: "gstr2b",  maxCount: 1 },
-    { name: "ledgers", maxCount: 6 },
+    { name: "ledgers", maxCount: 20 },
   ]),
   async (req, res, next) => {
     try {
