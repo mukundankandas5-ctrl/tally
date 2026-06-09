@@ -39,6 +39,7 @@ def _border():
 def norm(s):
     s = str(s).upper()
     s = re.sub(r'[^A-Z0-9 ]', ' ', s)
+    s = re.sub(r'\bAND\b', ' ', s)   # treat "AND" same as "&" (both stripped)
     return re.sub(r'\s+', ' ', s).strip()
 
 def token_overlap(a, b):
@@ -139,12 +140,8 @@ def parse_tally_ledger(path):
     rows = list(ws.iter_rows(values_only=True))
     if len(rows) < 9: return []
 
-    # Dynamically find the real header row: the row that has "Date" in col 0
-    # AND a CGST/IGST/SGST keyword somewhere in the row.
-    # Tally exports place company info in rows 0-5, ledger name in row 6, a
-    # "Ledger Account" caption in row 7, an empty row 8, a date-range in row 9,
-    # and the real column header in row 10.  We scan to be robust across variants.
-    header_row_idx = 7  # safe fallback (old behaviour)
+    # Find header row: first row that has "DATE" in col 0 AND any CGST/IGST/SGST keyword.
+    header_row_idx = 7
     for idx in range(min(len(rows), 20)):
         rv = [_str(v).upper() for v in (rows[idx] or [])]
         has_date = any(v.strip() == 'DATE' for v in rv)
@@ -155,24 +152,28 @@ def parse_tally_ledger(path):
 
     headers = [_str(h) for h in (rows[header_row_idx] if len(rows) > header_row_idx else [])]
 
-    tax_col_idx, tax_col_name = None, ''
+    # Collect ALL Input CGST and Input IGST column indices.
+    # Tally columnar exports show every tax sub-ledger as a separate column on the
+    # same row — a single invoice can have both CGST@9% and CGST@2.5% amounts in
+    # different columns.  Summing them gives the total CGST per voucher, which is
+    # what GSTR-2B reports as a single combined figure.
+    cgst_cols, igst_cols = [], []
     for i, h in enumerate(headers):
+        if i <= 2: continue
         hu = h.upper()
-        if any(kw in hu for kw in ['CGST INPUT','IGST INPUT','SGST INPUT',
-                                    'INPUT CGST','INPUT IGST','INPUT SGST','CGST @','IGST @']):
-            tax_col_idx, tax_col_name = i, h
-            break
-    if tax_col_idx is None:
-        for i, h in enumerate(headers):
-            if any(kw in h.upper() for kw in ['CGST','IGST','SGST']) and i > 2:
-                tax_col_idx, tax_col_name = i, h
-                break
+        if 'CGST' in hu and any(kw in hu for kw in ['INPUT', '@', '-']):
+            cgst_cols.append(i)
+        elif 'IGST' in hu and any(kw in hu for kw in ['INPUT', '@', '-']):
+            igst_cols.append(i)
 
-    tax_type = 'IGST' if 'IGST' in tax_col_name.upper() else 'CGST'
-    tax_rate = ''
-    for rate in ['28%','18%','12%','9%','6%','3%','2.5%','1.5%']:
-        if rate.replace('%','') in tax_col_name.replace(' ',''):
-            tax_rate = rate; break
+    # Fallback: any column beyond col 2 that mentions CGST or IGST
+    if not cgst_cols and not igst_cols:
+        for i, h in enumerate(headers):
+            if i <= 2: continue
+            if 'CGST' in h.upper(): cgst_cols.append(i)
+            elif 'IGST' in h.upper(): igst_cols.append(i)
+
+    default_tax_type = 'IGST' if (igst_cols and not cgst_cols) else 'CGST'
 
     entries = []
     for row in rows[header_row_idx + 1:]:
@@ -184,25 +185,35 @@ def parse_tally_ledger(path):
         party     = _str(row[1] if len(row) > 1 else '')
         narration = _str(row[2] if len(row) > 2 else '')
         date_val  = to_date_str(row[0] if row else None)
-        gross     = abs(_flt(row[5] if len(row) > 5 else 0))
+        gross     = abs(_flt(row[3] if len(row) > 3 else 0))  # col 3 = Gross Total
 
-        tax_amt = 0.0
-        if tax_col_idx is not None and tax_col_idx < len(row):
-            tax_amt = abs(_flt(row[tax_col_idx]))
+        # Sum ALL CGST columns → total CGST for this voucher (matches GSTR-2B combined figure)
+        cgst_total = sum(abs(_flt(row[i])) for i in cgst_cols if i < len(row))
+        igst_total = sum(abs(_flt(row[i])) for i in igst_cols if i < len(row))
+
+        if cgst_total > 0:
+            tax_amt  = cgst_total
+            tax_type = 'CGST'
+        elif igst_total > 0:
+            tax_amt  = igst_total
+            tax_type = 'IGST'
+        else:
+            tax_amt  = 0.0
+            tax_type = default_tax_type
 
         if tax_amt == 0.0 and gross == 0.0: continue
         if not date_val and not party and not narration: continue
 
         entries.append({
-            'date':       date_val,
-            'party':      party,
-            'narration':  narration,
+            'date':        date_val,
+            'party':       party,
+            'narration':   narration,
             'gross_total': gross,
-            'tax_amount': tax_amt,
-            'tax_rate':   tax_rate,
-            'tax_type':   tax_type,
-            'ledger_file':os.path.basename(path),
-            '_used':      False,
+            'tax_amount':  tax_amt,
+            'tax_rate':    '',        # not meaningful when summing multiple rate columns
+            'tax_type':    tax_type,
+            'ledger_file': os.path.basename(path),
+            '_used':       False,
         })
     return entries
 
@@ -240,10 +251,16 @@ def match_invoice(inv, tally_entries, all_tally_parties):
                 return 'matched', 'Via Narration', i, f'Matched via narration (score {nsc:.2f})', False
 
     # Tier 2 — Fuzzy name + tolerance
+    # When amounts agree within ₹1, promote to matched even with a fuzzy name
+    # (handles "&" vs "and", abbreviations, spacing variations).
     for i, e in avail:
         ov = token_overlap(gstr_name, e['party'])
-        if ov >= 0.5 and abs(e['tax_amount'] - gstr_tax) <= max(gstr_tax * 0.05, 50):
-            return 'unmatched', 'Fuzzy', i, f'Name overlap {ov:.2f} — review recommended', False
+        if ov >= 0.5:
+            diff = abs(e['tax_amount'] - gstr_tax)
+            if diff <= max(gstr_tax * 0.05, 50):
+                if diff <= 1.0:
+                    return 'matched', 'Fuzzy Name', i, f'Name overlap {ov:.2f}, amounts agree', False
+                return 'unmatched', 'Fuzzy', i, f'Name overlap {ov:.2f} — review recommended', False
 
     # Tier 2.5 — Ambiguous: collect candidates for Claude
     t25 = []
