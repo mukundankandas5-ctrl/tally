@@ -391,7 +391,8 @@ def run_match_passes(invoices, tally_entries):
         if ii in out or inv['tax_amount'] <= 0 or inv.get('doc_type') != 'Invoice': continue
         for jj, cn in enumerate(invoices):
             if jj in out or cn.get('doc_type') != 'Credit Note': continue
-            if cn['gstin'] == inv['gstin'] and abs(cn['tax_amount'] - inv['tax_amount']) <= 0.02:
+            if (cn['gstin'] == inv['gstin'] and cn['tax_type'] == inv['tax_type']
+                    and abs(cn['tax_amount'] - inv['tax_amount']) <= 0.02):
                 out[ii] = ('not_in_books', 'Offset Pair', None,
                            f'Cancelled by credit note {cn["invoice_no"]} — net zero, booking optional', False)
                 out[jj] = ('not_in_books', 'Offset Pair', None,
