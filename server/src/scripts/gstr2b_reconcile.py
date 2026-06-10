@@ -49,6 +49,57 @@ def token_overlap(a, b):
     if not ta or not tb:  return 0.0
     return len(ta & tb) / max(len(ta), len(tb))
 
+# Generic trade words shared by unrelated firms ("X AGENCIES" vs "Y AGENCIES").
+# Distinctive-token overlap prevents these from creating phantom matches.
+GENERIC_TOKENS = {
+    'AGENCIES','AGENCY','TRADERS','TRADING','STORES','STORE','ENTERPRISES',
+    'ENTERPRISE','ASSOCIATES','ASSOCIATE','INDUSTRIES','DISTRIBUTORS',
+    'DISTRIBUTION','MARKETING','FOODS','FOOD','PRODUCTS','MILLS','MILL',
+    'SNACKS','CORPORATION','VENTURES','COMPANY','CO','LIMITED','LTD','PRIVATE',
+    'PVT','LLP','SONS','TVL','CASH','THE','SRI','SHRI','SREE','SHREE',
+}
+
+def distinct_overlap(a, b):
+    """Overlap coefficient on distinctive (non-generic) name tokens."""
+    da = {w for w in norm(a).split() if w not in GENERIC_TOKENS}
+    db = {w for w in norm(b).split() if w not in GENERIC_TOKENS}
+    if not da or not db: return 0.0
+    return len(da & db) / min(len(da), len(db))
+
+def name_score(a, b):
+    """Combined name similarity: distinctive tokens dominate, generic fallback."""
+    d = distinct_overlap(a, b)
+    return d if d > 0 else token_overlap(a, b) * 0.5
+
+# ── Bill-number helpers ───────────────────────────────────────────────────────
+BILL_NO_RE = re.compile(
+    r'(BILL|CREDIT\s*NOTE|DEBIT\s*NOTE|INV(?:OICE)?)\s*NO\.?\s*([A-Za-z0-9/\-\.]+)',
+    re.IGNORECASE)
+
+def extract_bill_no(narration):
+    m = BILL_NO_RE.search(narration or '')
+    return m.group(2).strip().rstrip('.') if m else ''
+
+def doc_type_of(narration):
+    u = (narration or '').upper()
+    if 'CREDIT NOTE' in u: return 'Credit Note'
+    if 'DEBIT NOTE'  in u: return 'Debit Note'
+    return 'Invoice'
+
+def _digits(s): return re.sub(r'\D', '', s or '')
+
+def bill_no_match(inv_no, books_bill):
+    """True when the books bill number is the same document as the 2B invoice no.
+    GSTR-1 numbers often wrap the plain Tally bill no in prefixes/FY suffixes:
+    books '1058' ↔ 2B '1058'; books '142' ↔ 2B '26-27/00142'; books '63' ↔
+    2B 'TUP01/V2000063'."""
+    d = _digits(books_bill).lstrip('0')
+    if not d: return False
+    e = _digits(inv_no)
+    if e.lstrip('0') == d: return True
+    if len(d) >= 2 and e.endswith(d): return True
+    return d in [g.lstrip('0') for g in re.findall(r'\d+', inv_no or '')]
+
 NARR_NOISE = ["AS PER GSTR 2B","AS PER GSTR2B","BILL NO","BILL NO.",
               "INV NO","INVOICE NO","VIDE","BEING","TOWARDS",
               "PAYMENT TO","RECEIVED FROM"]
@@ -102,9 +153,30 @@ def parse_gstr2b(path):
     if len(rows) < 7:
         raise ValueError("B2B sheet has too few rows")
 
-    # Bug fix: real GSTR-2B B2B layout has "Invoice Value(₹)" at col 4 and
-    # "Whether RCM" at col 6 — so all indices from col 3 onwards shift left by 1
-    # vs the old (wrong) indices.
+    def _mk(gstin, name, doc_no, doc_date, pos, taxable, igst, cgst, sgst, itc, doc_type):
+        inv = {
+            'gstin':           gstin,
+            'supplier_name':   name,
+            'invoice_no':      doc_no,
+            'invoice_date':    doc_date,
+            'taxable_value':   taxable,
+            'igst':            igst,
+            'cgst':            cgst,
+            'sgst':            sgst,
+            'place_of_supply': pos,
+            'itc_availability':itc,
+            'doc_type':        doc_type,
+        }
+        # Classify by the tax actually charged, not by GSTIN prefix — a local
+        # supplier can still bill IGST (and vice versa).
+        if   cgst > 0: inv['tax_type'] = 'CGST'
+        elif igst > 0: inv['tax_type'] = 'IGST'
+        else:          inv['tax_type'] = 'CGST' if gstin.startswith('33') else 'IGST'
+        inv['tax_amount'] = inv['cgst'] if inv['tax_type'] == 'CGST' else inv['igst']
+        inv['rate_label'] = get_rate_label(inv)
+        return inv
+
+    # B2B sheet — invoices.
     # Col: 0=GSTIN 1=Name 2=InvNo 3=InvDate 4=InvValue 5=PlaceOfSupply
     #      6=RCM 7=Taxable 8=IGST 9=CGST 10=SGST 11=Cess
     #      12=GSTR1Period 13=GSTR1FilingDate 14=ITCAvailability 15=Reason
@@ -113,23 +185,24 @@ def parse_gstr2b(path):
         if not row or len(row) < 11: continue
         gstin = _str(row[0])
         if not gstin or len(gstin) < 10: continue
+        invoices.append(_mk(
+            gstin, _str(row[1]), _str(row[2]), to_date_str(row[3]), _str(row[5]),
+            _flt(row[7]), _flt(row[8]), _flt(row[9]), _flt(row[10]),
+            _str(row[14]) if len(row) > 14 else '', 'Invoice'))
 
-        inv = {
-            'gstin':           gstin,
-            'supplier_name':   _str(row[1]),
-            'invoice_no':      _str(row[2]),
-            'invoice_date':    to_date_str(row[3]),
-            'taxable_value':   _flt(row[7]),
-            'igst':            _flt(row[8]),
-            'cgst':            _flt(row[9]),
-            'sgst':            _flt(row[10]),
-            'place_of_supply': _str(row[5]),
-            'itc_availability':_str(row[14]) if len(row) > 14 else '',
-        }
-        inv['tax_type']   = 'CGST' if gstin.startswith('33') else 'IGST'
-        inv['tax_amount'] = inv['cgst'] if inv['tax_type'] == 'CGST' else inv['igst']
-        inv['rate_label'] = get_rate_label(inv)
-        invoices.append(inv)
+    # B2B-CDNR sheet — credit/debit notes (previously ignored entirely).
+    # Col: 0=GSTIN 1=Name 2=NoteNo 3=NoteType 4=NoteSupplyType 5=NoteDate
+    #      6=NoteValue 7=PlaceOfSupply 8=RCM 9=Taxable 10=IGST 11=CGST 12=SGST 13=Cess
+    if 'B2B-CDNR' in wb.sheetnames:
+        for row in list(wb['B2B-CDNR'].iter_rows(values_only=True))[6:]:
+            if not row or len(row) < 13: continue
+            gstin = _str(row[0])
+            if not gstin or len(gstin) < 10: continue
+            ntype = 'Credit Note' if _str(row[3]).upper().startswith('C') else 'Debit Note'
+            invoices.append(_mk(
+                gstin, _str(row[1]), _str(row[2]), to_date_str(row[5]), _str(row[7]),
+                _flt(row[9]), _flt(row[10]), _flt(row[11]), _flt(row[12]),
+                '', ntype))
 
     return company_info, invoices
 
@@ -208,6 +281,8 @@ def parse_tally_ledger(path):
             'date':        date_val,
             'party':       party,
             'narration':   narration,
+            'bill_no':     extract_bill_no(narration),
+            'doc_type':    doc_type_of(narration),
             'gross_total': gross,
             'tax_amount':  tax_amt,
             'tax_rate':    '',        # not meaningful when summing multiple rate columns
@@ -218,73 +293,137 @@ def parse_tally_ledger(path):
     return entries
 
 # ── Matching engine ───────────────────────────────────────────────────────────
-def match_invoice(inv, tally_entries, all_tally_parties):
-    gstr_name  = inv['supplier_name']
-    gstr_gstin = inv['gstin']
-    gstr_tax   = inv['tax_amount']
-    tax_type   = inv['tax_type']
-    rate_label = inv.get('rate_label', '')
+# Global tiered passes (strongest evidence first) instead of per-invoice greedy
+# matching.  Every tier requires the same doc type (invoice ↔ invoice, credit
+# note ↔ credit note) and tax type.  Amount tolerance for a confirmed match is
+# ₹1 — the old blanket max(5%, ₹50) tolerance created phantom matches between
+# unrelated suppliers sharing generic words like "AGENCIES".
+def _eligible(inv, e):
+    return (not e['_used']
+            and e['tax_type'] == inv['tax_type']
+            and e['doc_type'] == inv.get('doc_type', 'Invoice')
+            and e['tax_amount'] > 0)
 
-    avail = [(i, e) for i, e in enumerate(tally_entries)
-             if not e['_used'] and e['tax_type'] == tax_type and e['tax_amount'] > 0]
+def run_match_passes(invoices, tally_entries):
+    """Returns {invoice index → (status, match_type, tally index, reason, is_t25)}."""
+    out = {}
 
-    # Tier 0 — GSTIN in narration/party
-    for i, e in avail:
-        if gstr_gstin in (e['narration'] + ' ' + e['party']).upper():
-            if abs(e['tax_amount'] - gstr_tax) <= max(gstr_tax * 0.05, 50):
-                return 'matched', 'GSTIN Match', i, 'GSTIN confirmed in Tally narration', False
+    def tier(label, cond, status='matched', unique_only=False):
+        for ii, inv in enumerate(invoices):
+            if ii in out or inv['tax_amount'] <= 0: continue
+            cands = [(ti, e) for ti, e in enumerate(tally_entries)
+                     if _eligible(inv, e) and cond(inv, e)]
+            if not cands: continue
+            if unique_only and len(cands) > 1: continue
+            ti, e = max(cands, key=lambda c: name_score(inv['supplier_name'], c[1]['party']))
+            tally_entries[ti]['_used'] = True
+            out[ii] = (status, label, ti, '', False)
 
-    # Tier 1 — Exact name + amount ≤ ₹1 (rate-aware)
-    t1 = [(i, e) for i, e in avail
-          if norm(gstr_name) == norm(e['party']) and abs(e['tax_amount'] - gstr_tax) <= 1.0]
-    if t1:
-        pref = [(i, e) for i, e in t1 if e.get('tax_rate') == rate_label]
-        i, _ = (pref[0] if pref else t1[0])
-        return 'matched', 'Exact', i, '', False
+    # T0 — GSTIN written in the Tally narration/party + amount agrees
+    tier('GSTIN Match',
+         lambda inv, e: inv['gstin'] in (e['narration'] + ' ' + e['party']).upper()
+                        and abs(e['tax_amount'] - inv['tax_amount']) <= 1.0)
 
-    # Tier 1.5 — Narration match (blank party or name fails Tier 1)
-    for i, e in avail:
-        pb = not e['party'].strip()
-        if pb or token_overlap(gstr_name, e['party']) < 0.5:
-            nsc = token_overlap(gstr_name, clean_narration(e['narration']))
-            if nsc >= 0.4 and abs(e['tax_amount'] - gstr_tax) <= max(gstr_tax * 0.05, 50):
-                return 'matched', 'Via Narration', i, f'Matched via narration (score {nsc:.2f})', False
+    # T1 — name + bill number + amount: the strongest everyday signal
+    tier('Exact (name+bill+amount)',
+         lambda inv, e: name_score(inv['supplier_name'], e['party']) >= 0.5
+                        and bill_no_match(inv['invoice_no'], e['bill_no'])
+                        and abs(e['tax_amount'] - inv['tax_amount']) <= 1.0)
 
-    # Tier 2 — Fuzzy name + tolerance
-    # When amounts agree within ₹1, promote to matched even with a fuzzy name
-    # (handles "&" vs "and", abbreviations, spacing variations).
-    for i, e in avail:
-        ov = token_overlap(gstr_name, e['party'])
-        if ov >= 0.5:
-            diff = abs(e['tax_amount'] - gstr_tax)
-            if diff <= max(gstr_tax * 0.05, 50):
-                if diff <= 1.0:
-                    return 'matched', 'Fuzzy Name', i, f'Name overlap {ov:.2f}, amounts agree', False
-                return 'unmatched', 'Fuzzy', i, f'Name overlap {ov:.2f} — review recommended', False
+    # T2 — name + amount (unique candidate; bill format may differ entirely)
+    tier('Name + Amount',
+         lambda inv, e: name_score(inv['supplier_name'], e['party']) >= 0.5
+                        and abs(e['tax_amount'] - inv['tax_amount']) <= 1.0,
+         unique_only=True)
 
-    # Tier 2.5 — Ambiguous: collect candidates for Claude
-    t25 = []
-    for i, e in avail:
-        ov  = token_overlap(gstr_name, e['party'])
-        nsc = token_overlap(gstr_name, clean_narration(e['narration']))
-        diff = abs(e['tax_amount'] - gstr_tax)
-        pb   = not e['party'].strip()
-        if (0.3 <= ov < 0.5) or (pb and nsc >= 0.2) or (ov >= 0.3 and 50 < diff < gstr_tax * 0.10):
-            t25.append((i, e, ov, nsc, diff))
-    if t25:
-        bi, _, ov, nsc, df = max(t25, key=lambda x: x[2] + x[3])
-        return 'tier2_5', 'Pending AI Review', bi, f'Ambiguous: overlap={ov:.2f}, narr={nsc:.2f}, diff=₹{df:.2f}', True
+    # T3 — bill number + amount (unique): covers cash-ledger entries where the
+    # Tally party is blank or just "Cash" but the narration carries the bill no
+    tier('Bill + Amount',
+         lambda inv, e: bill_no_match(inv['invoice_no'], e['bill_no'])
+                        and abs(e['tax_amount'] - inv['tax_amount']) <= 1.0,
+         unique_only=True)
 
-    # Tier 3 — Amount only (no name match anywhere)
-    has_any = any(token_overlap(gstr_name, e['party']) >= 0.3
-                  for e in tally_entries if not e['_used'])
-    if not has_any:
-        for i, e in avail:
-            if abs(e['tax_amount'] - gstr_tax) <= 10:
-                return 'unmatched', 'Amount Only — verify name', i, \
-                       'No supplier name match; amount within ₹10', False
+    # T4 — narration carries the supplier name (party blank/cash) + amount
+    tier('Via Narration',
+         lambda inv, e: name_score(inv['supplier_name'], e['party']) < 0.5
+                        and token_overlap(inv['supplier_name'], clean_narration(e['narration'])) >= 0.4
+                        and abs(e['tax_amount'] - inv['tax_amount']) <= 1.0,
+         unique_only=True)
 
-    return 'not_in_books', 'No Match', None, 'Not found in purchase register', False
+    # T5 — consolidated bookings: several 2B docs from one supplier summing to
+    # a single unused Tally voucher (e.g. 9 small invoices booked as one entry)
+    from itertools import combinations
+    for ti, e in enumerate(tally_entries):
+        if e['_used'] or e['tax_amount'] <= 0: continue
+        pool = [ii for ii, inv in enumerate(invoices)
+                if ii not in out and inv['tax_amount'] > 0 and _eligible(inv, e)
+                and distinct_overlap(inv['supplier_name'], e['party']) >= 0.99]
+        if not (2 <= len(pool) <= 14): continue
+        hit = None
+        for size in range(len(pool), 1, -1):
+            for combo in combinations(pool, size):
+                if abs(sum(invoices[ii]['tax_amount'] for ii in combo) - e['tax_amount']) <= 1.0:
+                    hit = combo; break
+            if hit: break
+        if hit:
+            e['_used'] = True
+            for ii in hit:
+                out[ii] = ('matched', f'Consolidated ({len(hit)} docs = 1 voucher)', ti,
+                           f'Voucher {e["bill_no"] or e["narration"]} covers {len(hit)} GSTR-2B documents', False)
+
+    # T6 — same supplier + same bill number but amount differs → review
+    for ii, inv in enumerate(invoices):
+        if ii in out or inv['tax_amount'] <= 0: continue
+        cands = [(ti, e) for ti, e in enumerate(tally_entries)
+                 if _eligible(inv, e)
+                 and name_score(inv['supplier_name'], e['party']) >= 0.5
+                 and bill_no_match(inv['invoice_no'], e['bill_no'])]
+        if cands:
+            ti, e = cands[0]
+            tally_entries[ti]['_used'] = True
+            diff = round(abs(e['tax_amount'] - inv['tax_amount']), 2)
+            out[ii] = ('unmatched', 'Amount Mismatch', ti,
+                       f'Same supplier & bill no, tax differs by ₹{diff:,.2f} — verify invoice', False)
+
+    # T7 — offsetting invoice/credit-note pairs in 2B with no books entry:
+    # supplier billed and fully reversed; net zero, booking optional
+    for ii, inv in enumerate(invoices):
+        if ii in out or inv['tax_amount'] <= 0 or inv.get('doc_type') != 'Invoice': continue
+        for jj, cn in enumerate(invoices):
+            if jj in out or cn.get('doc_type') != 'Credit Note': continue
+            if cn['gstin'] == inv['gstin'] and abs(cn['tax_amount'] - inv['tax_amount']) <= 0.02:
+                out[ii] = ('not_in_books', 'Offset Pair', None,
+                           f'Cancelled by credit note {cn["invoice_no"]} — net zero, booking optional', False)
+                out[jj] = ('not_in_books', 'Offset Pair', None,
+                           f'Cancels invoice {inv["invoice_no"]} — net zero, booking optional', False)
+                break
+
+    # T8 — ambiguous: plausible supplier-name candidate within 10% → Claude
+    for ii, inv in enumerate(invoices):
+        if ii in out or inv['tax_amount'] <= 0: continue
+        cands = []
+        for ti, e in enumerate(tally_entries):
+            if not _eligible(inv, e): continue
+            ds  = distinct_overlap(inv['supplier_name'], e['party'])
+            nsc = token_overlap(inv['supplier_name'], clean_narration(e['narration']))
+            diff = abs(e['tax_amount'] - inv['tax_amount'])
+            if (ds >= 0.5 or nsc >= 0.4) and diff <= max(inv['tax_amount'] * 0.10, 5):
+                cands.append((ti, e, ds, nsc, diff))
+        if cands:
+            ti, e, ds, nsc, diff = max(cands, key=lambda c: c[2] + c[3])
+            out[ii] = ('tier2_5', 'Pending AI Review', ti,
+                       f'Ambiguous: name={ds:.2f}, narr={nsc:.2f}, diff=₹{diff:,.2f}', True)
+
+    # Everything else: zero-tax docs are informational; the rest are not booked
+    for ii, inv in enumerate(invoices):
+        if ii in out: continue
+        if inv['tax_amount'] <= 0:
+            out[ii] = ('not_in_books', 'Nil Tax', None,
+                       'Nil tax in GSTR-2B — no ITC impact', False)
+        else:
+            out[ii] = ('not_in_books', 'No Match', None,
+                       'Not found in purchase register', False)
+    return out
 
 # ── Phase 1: parse + deterministic match ─────────────────────────────────────
 def run_parse(gstr2b_path, ledger_paths):
@@ -294,28 +433,27 @@ def run_parse(gstr2b_path, ledger_paths):
     for lp in ledger_paths:
         all_tally.extend(parse_tally_ledger(lp))
 
-    # Deduplicate across files: if a "combined" ledger file (e.g. cg 2.xls) is
-    # uploaded alongside the individual ones it was built from, each entry would
-    # appear twice.  Key on (date, party, narration, tax_amount, tax_type) —
-    # keeping the first occurrence preserves file attribution.
+    # Deduplicate across files: a voucher that posts to two tax-rate ledgers
+    # (e.g. an invoice with both 5% and 18% lines) appears as a full identical
+    # row in BOTH register exports.  Narration is part of the key so two
+    # different bills from the same party/date/amount are NOT collapsed.
     seen_keys: set = set()
     deduped = []
     for e in all_tally:
-        key = (e['date'], norm(e['party']), e['tax_amount'], e['tax_type'])
+        key = (e['date'], norm(e['party']), norm(e['narration']),
+               e['gross_total'], e['tax_type'])
         if key not in seen_keys:
             seen_keys.add(key)
             deduped.append(e)
     all_tally = deduped
 
-    all_tally_parties = [e['party'] for e in all_tally if e['party'].strip()]
+    match_map = run_match_passes(gstr2b_invoices, all_tally)
 
     results, tier2_5_cands = [], []
-    for inv in gstr2b_invoices:
-        status, mtype, tidx, reason, is_t25 = match_invoice(inv, all_tally, all_tally_parties)
+    for inv_idx, inv in enumerate(gstr2b_invoices):
+        status, mtype, tidx, reason, is_t25 = match_map[inv_idx]
 
         me = all_tally[tidx] if tidx is not None else None
-        if status == 'matched' and me:
-            all_tally[tidx]['_used'] = True
 
         proposed = None
         if is_t25 and me:
@@ -336,7 +474,8 @@ def run_parse(gstr2b_path, ledger_paths):
             'books_ledger':     me['ledger_file'] if me else None,
             'books_tax':        me['tax_amount']  if me else None,
             'books_narration':  me['narration']   if me else None,
-            'tax_diff':         round(abs((me['tax_amount'] if me else 0) - inv['tax_amount']), 2),
+            'tax_diff':         0.0 if mtype.startswith('Consolidated')
+                                else round(abs((me['tax_amount'] if me else 0) - inv['tax_amount']), 2),
             'discrepancy_reason': reason,
             'tier2_5':          is_t25,
             '_proposed_tally':  proposed,
@@ -571,76 +710,89 @@ def build_summary_sheet(wb, company, mc, uc, nc, bc, mi, ui, ni, bi):
 # ── Sheet 2: Matched ──────────────────────────────────────────────────────────
 def build_matched_sheet(wb, entries):
     ws = wb.create_sheet("Matched")
-    _title_row(ws, 1, "✅  MATCHED ENTRIES", 13)
-    hdrs = ['Invoice No','Vendor Name','GSTIN','Date','Taxable ₹',
+    _title_row(ws, 1, "✅  MATCHED ENTRIES", 14)
+    hdrs = ['Invoice No','Doc','Vendor Name','GSTIN','Date','Taxable ₹',
             'GSTR-2B Tax ₹','Ledger','Books Party','Books Date','Books Tax ₹','Diff ₹','Tax Type','Match Type']
     _header_row(ws, 2, hdrs)
 
     for i, r in enumerate(entries):
         bg = ALT_GREEN if i % 2 == 0 else WHITE_HEX
-        vals = [r['invoice_no'], r['supplier_name'], r['gstin'], r['invoice_date'],
+        vals = [r['invoice_no'], r.get('doc_type','Invoice'), r['supplier_name'], r['gstin'], r['invoice_date'],
                 r['taxable_value'], r['tax_amount'], r.get('books_ledger',''),
                 r.get('books_party',''), r.get('books_date',''),
                 r.get('books_tax') or 0, r.get('tax_diff', 0),
                 r['tax_type'], r.get('match_type','')]
-        _data_row(ws, i + 3, vals, bg=bg, amt_cols={5,6,10,11})
+        _data_row(ws, i + 3, vals, bg=bg, amt_cols={6,7,11,12})
 
-    _autofit(ws); _freeze(ws, 3, 1); _autofilter(ws, 2, 13)
+    _autofit(ws); _freeze(ws, 3, 1); _autofilter(ws, 2, 14)
 
 # ── Sheet 3: Unmatched ────────────────────────────────────────────────────────
 def build_unmatched_sheet(wb, entries):
     ws = wb.create_sheet("Unmatched")
-    _title_row(ws, 1, "⚠️  UNMATCHED ENTRIES — Present in both but with discrepancies", 12)
-    hdrs = ['Invoice No','Vendor Name (2B)','GSTIN','Date','GSTR-2B Tax ₹',
+    _title_row(ws, 1, "⚠️  UNMATCHED ENTRIES — Present in both but with discrepancies", 13)
+    hdrs = ['Invoice No','Doc','Vendor Name (2B)','GSTIN','Date','GSTR-2B Tax ₹',
             'Books Party','Books Ledger','Books Date','Books Tax ₹','Diff ₹','Tax Type','Discrepancy Reason']
     _header_row(ws, 2, hdrs)
 
     for i, r in enumerate(entries):
         bg = ALT_AMBER if i % 2 == 0 else WHITE_HEX
         diff = r.get('tax_diff', 0)
-        vals = [r['invoice_no'], r['supplier_name'], r['gstin'], r['invoice_date'],
+        vals = [r['invoice_no'], r.get('doc_type','Invoice'), r['supplier_name'], r['gstin'], r['invoice_date'],
                 r['tax_amount'], r.get('books_party',''), r.get('books_ledger',''),
                 r.get('books_date',''), r.get('books_tax') or 0,
                 diff, r['tax_type'], r.get('discrepancy_reason','')]
-        _data_row(ws, i + 3, vals, bg=bg, amt_cols={5,9,10})
+        _data_row(ws, i + 3, vals, bg=bg, amt_cols={6,10,11})
         if diff and diff > 0:
-            ws.cell(row=i+3, column=10).fill = _fill(RED_DIFF)
-            ws.cell(row=i+3, column=10).font = _font(bold=True, color=RED_TOTAL)
+            ws.cell(row=i+3, column=11).fill = _fill(RED_DIFF)
+            ws.cell(row=i+3, column=11).font = _font(bold=True, color=RED_TOTAL)
 
-    _autofit(ws); _freeze(ws, 3, 1); _autofilter(ws, 2, 12)
+    _autofit(ws); _freeze(ws, 3, 1); _autofilter(ws, 2, 13)
 
 # ── Sheet 4: In GSTR-2B, Not in Books ────────────────────────────────────────
 def build_not_in_books_sheet(wb, entries):
     ws = wb.create_sheet("Not In Books")
-    _title_row(ws, 1, "📋  IN GSTR-2B BUT NOT IN PURCHASE REGISTER — Book these to claim ITC", 10)
-    hdrs = ['Invoice No','Vendor Name','GSTIN','Date','Place of Supply',
+    _title_row(ws, 1, "📋  IN GSTR-2B BUT NOT IN PURCHASE REGISTER — Book these to claim ITC", 11)
+    hdrs = ['Invoice No','Doc','Vendor Name','GSTIN','Date','Place of Supply',
             'Taxable ₹','Tax ₹','Tax Type','ITC Available','Action Required']
     _header_row(ws, 2, hdrs)
 
     for i, r in enumerate(entries):
         bg = BLUE_ROW if i % 2 == 0 else WHITE_HEX
-        itc = r.get('itc_availability', 'Yes')
+        itc = r.get('itc_availability', 'Yes') or 'Yes'
         tax = r['tax_amount']
-        action = f"Book in Tally — ITC of ₹{tax:,.2f} available" if itc.lower() not in ('no','ineligible') \
-                 else "ITC NOT available — consult CA before booking"
-        vals = [r['invoice_no'], r['supplier_name'], r['gstin'], r['invoice_date'],
+        mtype = r.get('match_type', '')
+        if mtype in ('Offset Pair', 'Nil Tax'):
+            action = r.get('discrepancy_reason', '')
+        elif r.get('doc_type') == 'Credit Note':
+            action = f"Credit note not booked — book to reverse ITC of ₹{tax:,.2f}"
+        elif itc.lower() in ('no', 'ineligible'):
+            action = "ITC NOT available — consult CA before booking"
+        else:
+            action = f"Book in Tally — ITC of ₹{tax:,.2f} available"
+        vals = [r['invoice_no'], r.get('doc_type','Invoice'), r['supplier_name'], r['gstin'], r['invoice_date'],
                 r.get('place_of_supply',''), r['taxable_value'], tax,
                 r['tax_type'], itc, action]
-        _data_row(ws, i + 3, vals, bg=bg, amt_cols={6,7})
+        _data_row(ws, i + 3, vals, bg=bg, amt_cols={7,8})
 
-    # Total row
+    # Total row — net bookable ITC only: skip offset pairs and nil-tax rows,
+    # credit notes reduce the total
     if entries:
         tr = len(entries) + 3
-        total_tax = round(sum(r['tax_amount'] for r in entries), 2)
-        for ci in range(1, 11):
+        total_tax = 0.0
+        for r in entries:
+            if r.get('match_type') in ('Offset Pair', 'Nil Tax'): continue
+            if r.get('doc_type') == 'Credit Note': total_tax -= r['tax_amount']
+            else:                                  total_tax += r['tax_amount']
+        total_tax = round(total_tax, 2)
+        for ci in range(1, 12):
             tc = ws.cell(row=tr, column=ci,
-                         value=('TOTAL' if ci == 1 else (total_tax if ci == 7 else '')))
+                         value=('NET BOOKABLE ITC' if ci == 1 else (total_tax if ci == 8 else '')))
             tc.fill = _fill(RED_TOTAL); tc.font = _font(bold=True, color=WHITE_HEX)
             tc.border = _border()
-            if ci == 7: tc.number_format = '#,##0.00'
+            if ci == 8: tc.number_format = '#,##0.00'
         ws.row_dimensions[tr].height = 18
 
-    _autofit(ws); _freeze(ws, 3, 1); _autofilter(ws, 2, 10)
+    _autofit(ws); _freeze(ws, 3, 1); _autofilter(ws, 2, 11)
 
 # ── Sheet 5: Others ───────────────────────────────────────────────────────────
 def build_others_sheet(wb, books_cgst, books_igst, itc_no):
