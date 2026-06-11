@@ -131,6 +131,46 @@ def get_rate_label(inv):
     return '9%'
 
 # ── GSTR-2B parser ────────────────────────────────────────────────────────────
+# Header-driven: GSTR-2B exports vary by a column or two between portal versions
+# (e.g. some include an "Invoice type" column, shifting every tax column right by
+# one).  We locate each field by its header text across the merged 2-row header
+# rather than by fixed index, so any standard government layout parses correctly.
+def _gstr2b_colmap(header_rows, is_cdnr=False):
+    ncols = max((len(r) for r in header_rows), default=0)
+    combined = []
+    for ci in range(ncols):
+        parts = [str(hr[ci]).upper() for hr in header_rows
+                 if ci < len(hr) and hr[ci] is not None]
+        combined.append(' '.join(parts))
+
+    def find(*keys, exclude=()):
+        for ci, txt in enumerate(combined):
+            if any(k in txt for k in keys) and not any(x in txt for x in exclude):
+                return ci
+        return None
+
+    return {
+        'gstin':   find('GSTIN'),
+        'name':    find('TRADE', 'LEGAL NAME', 'SUPPLIER NAME'),
+        'doc_no':  find('NOTE NUMBER', 'NOTE NO') if is_cdnr else find('INVOICE NUMBER', 'INVOICE NO'),
+        'doc_date':find('NOTE DATE') if is_cdnr else find('INVOICE DATE', exclude=('FILING',)),
+        'note_type':find('NOTE TYPE') if is_cdnr else None,
+        'pos':     find('PLACE OF SUPPLY'),
+        'taxable': find('TAXABLE VALUE'),
+        'igst':    find('INTEGRATED TAX'),
+        'cgst':    find('CENTRAL TAX'),
+        'sgst':    find('STATE/UT TAX', 'STATE TAX'),
+        'itc':     find('ITC AVAILABILITY'),
+    }
+
+def _find_b2b_header(rows):
+    """Index of the row whose first cell starts with 'GSTIN'. The header spans
+    that row and the next (merged), with data immediately after."""
+    for i, r in enumerate(rows[:20]):
+        if r and _str(r[0]).upper().startswith('GSTIN'):
+            return i
+    return None
+
 def parse_gstr2b(path):
     wb = openpyxl.load_workbook(path, data_only=True)
 
@@ -148,10 +188,6 @@ def parse_gstr2b(path):
 
     if 'B2B' not in wb.sheetnames:
         raise ValueError("GSTR-2B file has no 'B2B' sheet")
-
-    rows = list(wb['B2B'].iter_rows(values_only=True))
-    if len(rows) < 7:
-        raise ValueError("B2B sheet has too few rows")
 
     def _mk(gstin, name, doc_no, doc_date, pos, taxable, igst, cgst, sgst, itc, doc_type):
         inv = {
@@ -176,75 +212,88 @@ def parse_gstr2b(path):
         inv['rate_label'] = get_rate_label(inv)
         return inv
 
-    # B2B sheet — invoices.
-    # Col: 0=GSTIN 1=Name 2=InvNo 3=InvDate 4=InvValue 5=PlaceOfSupply
-    #      6=RCM 7=Taxable 8=IGST 9=CGST 10=SGST 11=Cess
-    #      12=GSTR1Period 13=GSTR1FilingDate 14=ITCAvailability 15=Reason
-    invoices = []
-    for row in rows[6:]:
-        if not row or len(row) < 11: continue
-        gstin = _str(row[0])
-        if not gstin or len(gstin) < 10: continue
-        invoices.append(_mk(
-            gstin, _str(row[1]), _str(row[2]), to_date_str(row[3]), _str(row[5]),
-            _flt(row[7]), _flt(row[8]), _flt(row[9]), _flt(row[10]),
-            _str(row[14]) if len(row) > 14 else '', 'Invoice'))
+    def _g(row, ci):
+        return row[ci] if ci is not None and ci < len(row) else None
 
-    # B2B-CDNR sheet — credit/debit notes (previously ignored entirely).
-    # Col: 0=GSTIN 1=Name 2=NoteNo 3=NoteType 4=NoteSupplyType 5=NoteDate
-    #      6=NoteValue 7=PlaceOfSupply 8=RCM 9=Taxable 10=IGST 11=CGST 12=SGST 13=Cess
+    def _read_sheet(sheet, is_cdnr):
+        rows = list(wb[sheet].iter_rows(values_only=True))
+        hdr = _find_b2b_header(rows)
+        if hdr is None: return []
+        cm = _gstr2b_colmap([rows[hdr], rows[hdr + 1] if hdr + 1 < len(rows) else ()], is_cdnr)
+        if cm['gstin'] is None: return []
+        out = []
+        for row in rows[hdr + 1:]:
+            if not row: continue
+            gstin = _str(_g(row, cm['gstin']))
+            if len(gstin) < 15: continue          # real GSTIN is 15 chars; skips header/total rows
+            if is_cdnr:
+                doc_type = 'Credit Note' if _str(_g(row, cm['note_type'])).upper().startswith('C') else 'Debit Note'
+                itc = ''
+            else:
+                doc_type = 'Invoice'
+                itc = _str(_g(row, cm['itc']))
+            out.append(_mk(
+                gstin, _str(_g(row, cm['name'])), _str(_g(row, cm['doc_no'])),
+                to_date_str(_g(row, cm['doc_date'])), _str(_g(row, cm['pos'])),
+                _flt(_g(row, cm['taxable'])), _flt(_g(row, cm['igst'])),
+                _flt(_g(row, cm['cgst'])), _flt(_g(row, cm['sgst'])), itc, doc_type))
+        return out
+
+    invoices = _read_sheet('B2B', is_cdnr=False)
     if 'B2B-CDNR' in wb.sheetnames:
-        for row in list(wb['B2B-CDNR'].iter_rows(values_only=True))[6:]:
-            if not row or len(row) < 13: continue
-            gstin = _str(row[0])
-            if not gstin or len(gstin) < 10: continue
-            ntype = 'Credit Note' if _str(row[3]).upper().startswith('C') else 'Debit Note'
-            invoices.append(_mk(
-                gstin, _str(row[1]), _str(row[2]), to_date_str(row[5]), _str(row[7]),
-                _flt(row[9]), _flt(row[10]), _flt(row[11]), _flt(row[12]),
-                '', ntype))
+        invoices.extend(_read_sheet('B2B-CDNR', is_cdnr=True))
 
     return company_info, invoices
 
 # ── Tally ledger parser ───────────────────────────────────────────────────────
+# Two export shapes are supported and auto-detected:
+#   A) Multi-rate register — a single sheet whose header row carries one column
+#      per tax sub-ledger ("Input CGST @9%", "Input IGST", …).  Tax per voucher =
+#      sum of all rate columns on that row.
+#   B) Single-ledger voucher register — the whole sheet IS one tax ledger (e.g.
+#      "Input Central Tax").  Layout: Date | Particulars (Dr/Cr marker + party in
+#      the next col) | Vch Type | … | Vch No. | Debit | Credit.  Tax = Debit
+#      (purchase ITC) or Credit (reversal/credit note); tax type comes from the
+#      ledger title row above the header.
 def parse_tally_ledger(path):
     wb = openpyxl.load_workbook(path, data_only=True)
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
     if len(rows) < 9: return []
 
-    # Find header row: first row that has "DATE" in col 0 AND any CGST/IGST/SGST keyword.
-    header_row_idx = 7
-    for idx in range(min(len(rows), 20)):
+    # Locate the header row: contains a standalone "DATE" plus other column labels.
+    header_row_idx = None
+    for idx in range(min(len(rows), 25)):
         rv = [_str(v).upper() for v in (rows[idx] or [])]
-        has_date = any(v.strip() == 'DATE' for v in rv)
-        has_tax  = any(any(kw in v for kw in ['CGST','IGST','SGST']) for v in rv)
-        if has_date and has_tax:
+        if any(v.strip() == 'DATE' for v in rv) and any(
+                kw in v for v in rv for kw in
+                ['CGST','IGST','SGST','PARTICULARS','DEBIT','CREDIT','VCH']):
             header_row_idx = idx
             break
+    if header_row_idx is None:
+        header_row_idx = 7
 
     headers = [_str(h) for h in (rows[header_row_idx] if len(rows) > header_row_idx else [])]
+    hu = [h.upper() for h in headers]
+    has_rate_cols = any(any(kw in h for kw in ['CGST','IGST','SGST']) for h in hu)
 
-    # Collect ALL Input CGST and Input IGST column indices.
-    # Tally columnar exports show every tax sub-ledger as a separate column on the
-    # same row — a single invoice can have both CGST@9% and CGST@2.5% amounts in
-    # different columns.  Summing them gives the total CGST per voucher, which is
-    # what GSTR-2B reports as a single combined figure.
+    if not has_rate_cols and any('PARTICULARS' in h for h in hu) \
+            and any(h.strip() == 'DEBIT' for h in hu):
+        return _parse_single_ledger(rows, header_row_idx, headers, path)
+
+    # ── Format A: multi-rate register ────────────────────────────────────────
     cgst_cols, igst_cols = [], []
     for i, h in enumerate(headers):
         if i <= 2: continue
-        hu = h.upper()
-        if 'CGST' in hu and any(kw in hu for kw in ['INPUT', '@', '-']):
+        if 'CGST' in hu[i] and any(kw in hu[i] for kw in ['INPUT', '@', '-']):
             cgst_cols.append(i)
-        elif 'IGST' in hu and any(kw in hu for kw in ['INPUT', '@', '-']):
+        elif 'IGST' in hu[i] and any(kw in hu[i] for kw in ['INPUT', '@', '-']):
             igst_cols.append(i)
-
-    # Fallback: any column beyond col 2 that mentions CGST or IGST
     if not cgst_cols and not igst_cols:
         for i, h in enumerate(headers):
             if i <= 2: continue
-            if 'CGST' in h.upper(): cgst_cols.append(i)
-            elif 'IGST' in h.upper(): igst_cols.append(i)
+            if 'CGST' in hu[i]: cgst_cols.append(i)
+            elif 'IGST' in hu[i]: igst_cols.append(i)
 
     default_tax_type = 'IGST' if (igst_cols and not cgst_cols) else 'CGST'
 
@@ -260,19 +309,15 @@ def parse_tally_ledger(path):
         date_val  = to_date_str(row[0] if row else None)
         gross     = abs(_flt(row[3] if len(row) > 3 else 0))  # col 3 = Gross Total
 
-        # Sum ALL CGST columns → total CGST for this voucher (matches GSTR-2B combined figure)
         cgst_total = sum(abs(_flt(row[i])) for i in cgst_cols if i < len(row))
         igst_total = sum(abs(_flt(row[i])) for i in igst_cols if i < len(row))
 
         if cgst_total > 0:
-            tax_amt  = cgst_total
-            tax_type = 'CGST'
+            tax_amt, tax_type = cgst_total, 'CGST'
         elif igst_total > 0:
-            tax_amt  = igst_total
-            tax_type = 'IGST'
+            tax_amt, tax_type = igst_total, 'IGST'
         else:
-            tax_amt  = 0.0
-            tax_type = default_tax_type
+            tax_amt, tax_type = 0.0, default_tax_type
 
         if tax_amt == 0.0 and gross == 0.0: continue
         if not date_val and not party and not narration: continue
@@ -285,7 +330,76 @@ def parse_tally_ledger(path):
             'doc_type':    doc_type_of(narration),
             'gross_total': gross,
             'tax_amount':  tax_amt,
-            'tax_rate':    '',        # not meaningful when summing multiple rate columns
+            'tax_rate':    '',
+            'tax_type':    tax_type,
+            'ledger_file': os.path.basename(path),
+            '_used':       False,
+        })
+    return entries
+
+def _parse_single_ledger(rows, header_row_idx, headers, path):
+    """Format B — one whole sheet is a single Input-tax ledger."""
+    hu = [h.upper() for h in headers]
+
+    def col_for(*keys, exact=None):
+        for i, h in enumerate(hu):
+            if exact is not None and h.strip() == exact: return i
+            if any(k in h for k in keys): return i
+        return None
+
+    date_col   = col_for(exact='DATE') or 0
+    party_col  = col_for('PARTICULARS')
+    if party_col is None: party_col = 1
+    bill_col   = col_for('VCH NO', 'VOUCHER NO', 'VCH NO.')
+    vtype_col  = col_for('VCH TYPE', 'VOUCHER TYPE')
+    debit_col  = col_for(exact='DEBIT')
+    credit_col = col_for(exact='CREDIT')
+
+    # Tax type from the ledger title (rows above the header) — "Input Central Tax"
+    # → CGST, "Input Integrated Tax" → IGST, "Input State Tax" → SGST (treated as
+    # CGST for 2B reconciliation since intra-state CGST and SGST mirror each other).
+    title = ' '.join(_str(c) for r in rows[:header_row_idx] for c in (r or [])).upper()
+    if   'INTEGRATED' in title: tax_type = 'IGST'
+    elif 'CENTRAL'    in title: tax_type = 'CGST'
+    elif 'STATE'      in title: tax_type = 'CGST'
+    else:                       tax_type = 'CGST'
+
+    def _g(row, ci):
+        return row[ci] if ci is not None and ci < len(row) else None
+
+    entries = []
+    for row in rows[header_row_idx + 1:]:
+        if not row or not any(row): continue
+
+        # Party: the Particulars column holds a Dr/Cr marker ("To"/"By"); the real
+        # ledger name sits in the next column.  Fall back to the marker column.
+        marker = _str(_g(row, party_col))
+        name   = _str(_g(row, party_col + 1))
+        party  = name if name else (marker if marker.upper() not in ('TO', 'BY') else '')
+
+        up = party.upper()
+        if not party or 'OPENING BALANCE' in up or 'CLOSING BALANCE' in up: continue
+
+        debit  = abs(_flt(_g(row, debit_col)))
+        credit = abs(_flt(_g(row, credit_col)))
+        if debit > 0:
+            tax_amt, doc_type = debit, 'Invoice'
+        elif credit > 0:
+            tax_amt, doc_type = credit, 'Credit Note'
+        else:
+            continue
+
+        bill = _str(_g(row, bill_col))
+        narration = _str(_g(row, vtype_col))
+        entries.append({
+            'date':        to_date_str(_g(row, date_col)),
+            'party':       party,
+            'narration':   narration,
+            'bill_no':     bill,
+            'doc_type':    doc_type,
+            'gross_total': tax_amt,    # no separate gross in a single-tax ledger
+            'tax_amount':  tax_amt,
+            'tax_rate':    '',
             'tax_type':    tax_type,
             'ledger_file': os.path.basename(path),
             '_used':       False,
