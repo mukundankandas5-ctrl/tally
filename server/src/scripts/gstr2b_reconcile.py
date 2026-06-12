@@ -526,6 +526,9 @@ def run_match_passes(invoices, tally_entries):
                 cands.append((ti, e, ds, nsc, diff))
         if cands:
             ti, e, ds, nsc, diff = max(cands, key=lambda c: c[2] + c[3])
+            # Mark used so no other invoice can claim the same Tally entry as a
+            # tier2_5 candidate — prevents double-counting in the accounting proof.
+            tally_entries[ti]['_used'] = True
             out[ii] = ('tier2_5', 'Pending AI Review', ti,
                        f'Ambiguous: name={ds:.2f}, narr={nsc:.2f}, diff=₹{diff:,.2f}', True)
 
@@ -548,18 +551,49 @@ def run_parse(gstr2b_path, ledger_paths):
     for lp in ledger_paths:
         all_tally.extend(parse_tally_ledger(lp))
 
-    # Deduplicate across files: a voucher that posts to two tax-rate ledgers
-    # (e.g. an invoice with both 5% and 18% lines) appears as a full identical
-    # row in BOTH register exports.  Narration is part of the key so two
-    # different bills from the same party/date/amount are NOT collapsed.
-    seen_keys: set = set()
-    deduped = []
+    # Deduplicate / merge across ledger files.
+    #
+    # Two scenarios require different handling:
+    #   A) Same voucher in two ledger files of the same type (true duplicate) →
+    #      keep one copy.
+    #   B) Same voucher spread across two rate-specific files (e.g. CGST@2.5%
+    #      and CGST@9%) → the bill number is the same but the per-file tax
+    #      amount is only one portion; SUM them to get the combined CGST that
+    #      GSTR-2B reports as a single figure.
+    #
+    # Key: bill_no (unique per voucher) when available; fall back to narration
+    # for entries where no bill number could be extracted.  We do NOT use
+    # gross_total or narration as the primary discriminator because in
+    # single-ledger exports gross_total == tax_amount and narration == vch_type,
+    # which are not unique per voucher and cause legitimate separate invoices to
+    # be incorrectly collapsed.
+    from collections import defaultdict
+    # Step 1 — within each file, eliminate exact-duplicate rows (same
+    # party+bill+tax on the same date in the same file).
+    intra_seen: set = set()
+    intra_deduped = []
     for e in all_tally:
-        key = (e['date'], norm(e['party']), norm(e['narration']),
-               e['gross_total'], e['tax_type'])
-        if key not in seen_keys:
-            seen_keys.add(key)
-            deduped.append(e)
+        bill_id = e['bill_no'] or norm(e['narration'])
+        k = (e['ledger_file'], e['date'], norm(e['party']), bill_id, e['tax_type'])
+        if k not in intra_seen:
+            intra_seen.add(k)
+            intra_deduped.append(e)
+
+    # Step 2 — cross-file merge: group by (date, party, bill_id, tax_type);
+    # if multiple files contribute to the same bill, SUM their tax amounts.
+    cross_groups: dict = defaultdict(list)
+    for e in intra_deduped:
+        bill_id = e['bill_no'] or norm(e['narration'])
+        cross_groups[(e['date'], norm(e['party']), bill_id, e['tax_type'])].append(e)
+
+    deduped = []
+    for group in cross_groups.values():
+        if len(group) == 1:
+            deduped.append(group[0])
+        else:
+            merged = dict(group[0])
+            merged['tax_amount'] = round(sum(g['tax_amount'] for g in group), 2)
+            deduped.append(merged)
     all_tally = deduped
 
     match_map = run_match_passes(gstr2b_invoices, all_tally)
