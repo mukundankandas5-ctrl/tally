@@ -9,6 +9,6 @@ module.exports = {
   host: process.env.HOST || "0.0.0.0",
   corsOrigin: process.env.CORS_ORIGIN || "http://localhost:5173",
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || "",
-  anthropicModel: "claude-sonnet-4-20250514",
+  anthropicModel: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
   defaultUserId: process.env.DEFAULT_USER_ID || "local-user",
 };
