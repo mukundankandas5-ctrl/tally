@@ -450,21 +450,82 @@ def verify_output(out_path, src_path, results):
     return ok, lines
 
 
-def derive_company_info(gstr2b_path, ledger_paths, company_override):
+# ── Company / GSTIN / period identity + cross-check ──────────────────────────
+# The authoritative identity of a run is the GSTR-2B's "Read me" sheet (legal
+# name, GSTIN, tax period). We cross-check it against the 2B filename and the
+# Tally ledger headers and ABORT if they disagree — so one client's 2B can never
+# be reconciled against another client's ledgers, or against the wrong month.
+_IDENTITY_MIN_NAME = 0.34          # distinctive-name overlap below this = a different company
+
+
+def _ledger_company(path):
+    """Company name from a Tally ledger's top rows (first alphabetic, non-address line)."""
+    try:
+        head = list(load_workbook(path, data_only=True).active.iter_rows(values_only=True))[:4]
+        for r in head:
+            cand = _s(r[0]) if r else ''
+            if cand and not cand[0].isdigit() and not re.match(r'(?i)no\.?\d|input |ledger', cand):
+                return cand
+    except Exception:
+        pass
+    return ''
+
+
+def read_2b_readme(path):
+    """Authoritative company info from the GSTR-2B 'Read me' sheet (fy/period/gstin/
+    legal/trade), matching gstr2b_reconcile.parse_gstr2b. {} if there is no sheet
+    (older portal exports omitted it — identity then falls back to the filename)."""
+    try:
+        wb = load_workbook(path, data_only=True)
+    except Exception:
+        return {}
+    if 'Read me' not in wb.sheetnames:
+        return {}
+    r = list(wb['Read me'].iter_rows(values_only=True))
+    def c(ri, ci): return _s(r[ri][ci]) if len(r) > ri and r[ri] is not None and len(r[ri]) > ci else ''
+    return {'fy': c(3, 2), 'period': c(4, 2), 'gstin': c(5, 2),
+            'legal_name': c(6, 2), 'trade_name': c(7, 2)}
+
+
+def resolve_identity(gstr2b_path, ledger_paths, readme, company_override):
+    """Return (company_info, [problems]). company_info prefers the 2B 'Read me'
+    sheet with the filename as the calendar-period source; problems lists any
+    cross-check failure between the 2B and the ledgers (different client / month)."""
     base = os.path.basename(gstr2b_path)
-    gstin = (re.search(r'(\d{2}[A-Z]{5}\d{4}[A-Z0-9]{4})', base) or [None, ''])[1] if re.search(r'\d{2}[A-Z]{5}\d{4}[A-Z0-9]{4}', base) else ''
-    m = re.search(r'(\d{2})(\d{4})', base)
-    period = f"{MONTHS.get(int(m.group(1)), m.group(1))} {m.group(2)}" if m else ''
-    name = company_override or ''
-    if not name and ledger_paths:
-        try:
-            head = list(load_workbook(ledger_paths[0], data_only=True).active.iter_rows(values_only=True))[:4]
-            for r in head:                       # company name = first alphabetic, non-address line
-                cand = _s(r[0]) if r else ''
-                if cand and not cand[0].isdigit() and not re.match(r'(?i)no\.?\d|input |ledger', cand):
-                    name = cand; break
-        except Exception: pass
-    return {'legal_name': name, 'trade_name': name, 'gstin': gstin, 'period': period, 'fy': ''}
+    gm = re.search(r'(\d{2}[A-Z]{5}\d{4}[A-Z0-9]{4})', base)
+    fm_gstin = gm.group(1).upper() if gm else ''
+    pm = re.search(r'(\d{2})(\d{4})', base)
+    fm_month = MONTHS.get(int(pm.group(1)), '') if pm else ''
+    fm_period = f"{fm_month} {pm.group(2)}" if pm and fm_month else ''
+
+    rm_gstin  = _s(readme.get('gstin')).upper()
+    rm_period = _s(readme.get('period'))
+    rm_legal  = _s(readme.get('legal_name'))
+    rm_trade  = _s(readme.get('trade_name'))
+    rm_names  = [n for n in (rm_legal, rm_trade) if n]
+
+    gstin  = rm_gstin or fm_gstin
+    period = fm_period or rm_period          # filename MMYYYY is the unambiguous calendar period
+    legal  = (company_override or rm_legal or rm_trade
+              or (_ledger_company(ledger_paths[0]) if ledger_paths else '') or 'Company')
+
+    problems = []
+    # (1) the 2B's own filename must agree with its Read-me contents
+    if rm_gstin and fm_gstin and rm_gstin != fm_gstin:
+        problems.append(f"GSTR-2B filename GSTIN {fm_gstin} does not match the GSTIN inside the file "
+                        f"({rm_gstin}) — wrong or renamed 2B file.")
+    if fm_month and rm_period and fm_month.lower() != rm_period.strip().lower():
+        problems.append(f"GSTR-2B filename month ({fm_month}) does not match the period inside the file "
+                        f"({rm_period}) — wrong or renamed 2B file.")
+    # (2) the ledgers must belong to the same company as the 2B
+    if rm_names:
+        for lp in ledger_paths:
+            lc = _ledger_company(lp)
+            if lc and max(recon.name_score(n, lc) for n in rm_names) < _IDENTITY_MIN_NAME:
+                problems.append(f"Ledger '{os.path.basename(lp)}' is for company '{lc}', but the GSTR-2B is "
+                                f"for '{rm_legal or rm_trade}' — the 2B and ledgers look like different clients.")
+    return ({'legal_name': legal, 'trade_name': legal, 'gstin': gstin,
+             'period': period, 'fy': _s(readme.get('fy'))}, problems)
 
 
 def make_numbers_compatible(path):
@@ -527,11 +588,24 @@ def main():
     ap.add_argument('--no-ai', action='store_true', help='force the deterministic tier-2.5 rule (skip Claude)')
     ap.add_argument('--api-key', default=None, help='Anthropic key (else env ANTHROPIC_API_KEY / project .env)')
     ap.add_argument('--model', default=DEFAULT_MODEL)
+    ap.add_argument('--force-identity', action='store_true',
+                    help='proceed even if the 2B and ledgers look like different clients/periods')
     a = ap.parse_args()
 
     outdir = a.outdir or os.path.dirname(os.path.abspath(a.gstr2b))
     os.makedirs(outdir, exist_ok=True)
-    company = derive_company_info(a.gstr2b, a.ledger, a.company)
+
+    # 0) identity + cross-check — the 2B and the ledgers must be the same client/month
+    readme = read_2b_readme(a.gstr2b)
+    company, id_problems = resolve_identity(a.gstr2b, a.ledger, readme, a.company)
+    print(f"  client : {company['legal_name']}  |  GSTIN {company['gstin'] or '?'}  |  period {company['period'] or '?'}")
+    if id_problems:
+        print("  ✗ FILE IDENTITY CHECK:")
+        for p in id_problems: print("     ", p)
+        if not a.force_identity:
+            sys.exit("  Aborting: the GSTR-2B and ledgers do not appear to be the same client/period. "
+                     "Check the inputs; re-run with --force-identity only if you are sure they belong together.")
+        print("  ⚠ --force-identity set: continuing despite the mismatch above.")
 
     # 1) normalise ledgers → clean Format-B temp files the engine reads cleanly
     clean_paths = []

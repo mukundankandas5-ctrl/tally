@@ -46,6 +46,22 @@ Outputs (written next to the GSTR-2B, or `--outdir`):
 2. `GSTR2B_Reconciliation_<period>.xlsx` — the engine's 5-sheet report (Summary / Matched /
    Unmatched / Not In Books / Others), the proof trail. Skip with `--no-report`.
 
+### Client/period identity guard (automatic — important for multi-client work)
+
+Before reconciling, the script resolves the client identity from the GSTR-2B's "Read me" sheet
+(legal name, GSTIN) plus the filename (calendar month), prints a `client : <name> | GSTIN … |
+period …` line, and **cross-checks it against the Tally ledgers**. It **aborts with a clear
+message** (exit non-zero) when:
+- the GSTR-2B filename GSTIN/month disagrees with the GSTIN/period inside the file (wrong or
+  renamed 2B), or
+- a ledger's company header doesn't match the 2B's company (one client's 2B paired with another
+  client's ledgers).
+
+This means a mix-up across clients/months is caught even if the prompt forgets to check. Older
+2B exports with no "Read me" sheet fall back to the filename and skip the company match (nothing
+to compare against). Override a false positive (e.g. a legal-vs-trade-name variation) with
+`--force-identity`. Always read the printed `client …` line back to the user.
+
 ### Accuracy & the built-in "check twice" (do not skip)
 
 The script verifies itself **twice** and **exits non-zero / prints `VERIFICATION FAILED` if any
