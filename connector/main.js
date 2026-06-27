@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, Notification, dialog } = require("electron");
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, Notification } = require("electron");
 const Store = require("electron-store");
 const axios = require("axios");
 const WebSocket = require("ws");
@@ -6,7 +6,11 @@ const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const path = require("path");
 
-app.disableHardwareAcceleration();
+// Required on Windows 11 for toast notifications and taskbar grouping to work correctly.
+// Must be called before app.whenReady().
+if (process.platform === "win32") {
+  app.setAppUserModelId("com.tallyai.connector");
+}
 
 const gotTheLock = app.requestSingleInstanceLock();
 
@@ -108,15 +112,34 @@ function getWsUrl() {
   return backendUrl.replace(/^http/i, "ws") + "/ws";
 }
 
-function renderIcon(color) {
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
-      <circle cx="16" cy="16" r="11" fill="${color}" />
-      <circle cx="16" cy="16" r="14" fill="none" stroke="#0f172a" stroke-width="2" />
-    </svg>
-  `;
+function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
 
-  return nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`);
+function renderIcon(color) {
+  // Windows 11 system tray does not support SVG data URLs — must use raw RGBA PNG buffer.
+  const [r, g, b] = hexToRgb(color);
+  const size = 16;
+  const buf = Buffer.alloc(size * size * 4, 0); // RGBA, fully transparent by default
+  const cx = (size - 1) / 2;
+  const cy = (size - 1) / 2;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dist = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+      const idx = (y * size + x) * 4;
+      if (dist <= 5.5) {
+        // Filled colour circle
+        buf[idx] = r; buf[idx + 1] = g; buf[idx + 2] = b; buf[idx + 3] = 255;
+      } else if (dist <= 7.0) {
+        // Thin dark border ring for legibility on both light and dark taskbars
+        buf[idx] = 15; buf[idx + 1] = 23; buf[idx + 2] = 42; buf[idx + 3] = 200;
+      }
+    }
+  }
+
+  return nativeImage.createFromBuffer(buf, { width: size, height: size });
 }
 
 function currentTrayColor() {
@@ -172,6 +195,9 @@ function createWindow(opts) {
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
     },
   });
 
@@ -225,8 +251,10 @@ function openStatusWindow() {
 }
 
 function updateStartupSetting() {
+  // Windows 11 requires an explicit executable path for login item registration to work.
   app.setLoginItemSettings({
     openAtLogin: Boolean(store.get("launchAtStartup")),
+    ...(process.platform === "win32" ? { path: process.execPath } : {}),
   });
 }
 
