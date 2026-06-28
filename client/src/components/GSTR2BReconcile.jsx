@@ -9,7 +9,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { reconcileGstr2bFull, downloadGstr2bReport } from "../utils/api";
+import { reconcileGstr2bFull, downloadGstr2bReport, downloadGstr2bFile } from "../utils/api";
 
 // ── Design-system primitives (matching App.jsx) ───────────────────────────────
 function cn(...vals) { return vals.filter(Boolean).join(" "); }
@@ -537,16 +537,63 @@ export default function GSTR2BReconcile() {
         )}
       </div>
 
-      {/* Download reminder */}
-      <div className="flex items-center justify-between rounded-xl border border-[#C4B5FD] bg-[#F5F3FF] px-5 py-4">
-        <div>
-          <div className="text-sm font-semibold text-[#7C3AED]">Full 5-sheet Excel report ready</div>
-          <div className="mt-0.5 text-xs text-[#6B7280]">Includes Summary, Matched, Unmatched, Not in Books, and Others sheets with CA-ready formatting</div>
+      {/* Downloads */}
+      <div className="space-y-3">
+        {/* 5-sheet report */}
+        <div className="flex items-center justify-between rounded-xl border border-[#C4B5FD] bg-[#F5F3FF] px-5 py-4">
+          <div>
+            <div className="text-sm font-semibold text-[#7C3AED]">Full 5-sheet Excel report</div>
+            <div className="mt-0.5 text-xs text-[#6B7280]">Summary · Matched · Unmatched · Not in Books · Others — CA-ready formatting</div>
+          </div>
+          <Btn variant="primary" onClick={() => downloadGstr2bReport(result.download_url)}>
+            <Download className="h-4 w-4" />
+            Download
+          </Btn>
         </div>
-        <Btn variant="primary" onClick={() => downloadGstr2bReport(result.download_url)}>
-          <Download className="h-4 w-4" />
-          Download
-        </Btn>
+
+        {/* Colour-coded GSTR-2B */}
+        {result.color_2b_url && (
+          <div className="flex items-center justify-between rounded-xl border border-[#BBF7D0] bg-[#F0FDF4] px-5 py-4">
+            <div>
+              <div className="text-sm font-semibold text-[#166534]">Colour-coded GSTR-2B</div>
+              <div className="mt-0.5 text-xs text-[#6B7280]">
+                Faithful portal copy — tax figures coloured{" "}
+                <span className="font-medium text-[#166534]">green</span> (matched) ·{" "}
+                <span className="font-medium text-[#C55A11]">orange</span> (tax differs) ·{" "}
+                <span className="font-medium text-[#DC2626]">red</span> (not in books)
+              </div>
+            </div>
+            <Btn variant="ghost" onClick={() => downloadGstr2bFile(result.color_2b_url, result.color_2b_url.split("/").pop())}>
+              <Download className="h-4 w-4" />
+              Download
+            </Btn>
+          </div>
+        )}
+
+        {/* Colour-coded Tally ledger files */}
+        {result.tally_urls && result.tally_urls.length > 0 && (
+          <div className="rounded-xl border border-[#FED7AA] bg-[#FFF7ED] px-5 py-4">
+            <div className="mb-3">
+              <div className="text-sm font-semibold text-[#92400E]">Colour-coded Tally ledger files</div>
+              <div className="mt-0.5 text-xs text-[#6B7280]">
+                Original ledger with unmatched entries in{" "}
+                <span className="font-medium text-[#DC2626]">red</span> (not in GSTR-2B) and{" "}
+                <span className="font-medium text-[#C55A11]">orange</span> (tax amount differs) — matched rows unchanged
+              </div>
+            </div>
+            <div className="space-y-2">
+              {result.tally_urls.map((t, i) => (
+                <div key={i} className="flex items-center justify-between gap-3 rounded-lg border border-[#FED7AA] bg-white px-3 py-2">
+                  <span className="truncate text-xs text-[#374151]">{t.filename}</span>
+                  <Btn variant="ghost" className="flex-shrink-0 py-1 text-xs" onClick={() => downloadGstr2bFile(t.url, t.filename)}>
+                    <Download className="h-3.5 w-3.5" />
+                    Download
+                  </Btn>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

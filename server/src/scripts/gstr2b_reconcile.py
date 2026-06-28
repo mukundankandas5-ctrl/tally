@@ -1062,7 +1062,8 @@ def run_generate(parse_result, claude_results, output_path):
             'cgst':    _s(mc, uc, nc, bc),
             'igst':    _s(mi, ui, ni, bi),
         },
-        'entries': entries,
+        'entries':    entries,
+        'books_only': final.get('books_only', []),
     }
 
 # ── Main ──────────────────────────────────────────────────────────────────────

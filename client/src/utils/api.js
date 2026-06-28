@@ -661,3 +661,12 @@ export function downloadGstr2bReport(downloadUrl) {
   document.body.removeChild(a);
 }
 
+export function downloadGstr2bFile(downloadUrl, filename) {
+  const a = document.createElement("a");
+  a.href = downloadUrl;
+  a.download = filename || "download.xlsx";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+

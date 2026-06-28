@@ -1,7 +1,7 @@
 const fs      = require("fs");
 const express = require("express");
 const multer  = require("multer");
-const { reconcileGstr2b, getDownloadPath, deleteDownloadToken } = require("../services/gstr2bService");
+const { reconcileGstr2b, getDownloadEntry, deleteDownloadToken } = require("../services/gstr2bService");
 
 const router = express.Router();
 
@@ -19,7 +19,7 @@ router.post(
   ]),
   async (req, res, next) => {
     try {
-      const gstr2bFile = req.files?.gstr2b?.[0];
+      const gstr2bFile  = req.files?.gstr2b?.[0];
       const ledgerFiles = req.files?.ledgers || [];
 
       if (!gstr2bFile) {
@@ -31,7 +31,11 @@ router.post(
 
       const result = await reconcileGstr2b(
         gstr2bFile.buffer,
-        ledgerFiles.map((f) => f.buffer)
+        ledgerFiles.map((f) => f.buffer),
+        {
+          gstr2bName:   gstr2bFile.originalname,
+          ledgerNames:  ledgerFiles.map((f) => f.originalname),
+        }
       );
 
       res.json(result);
@@ -44,15 +48,15 @@ router.post(
 // GET /api/reconcile/download/:id
 router.get("/download/:id", (req, res, next) => {
   try {
-    const filePath = getDownloadPath(req.params.id);
-    if (!filePath) {
+    const entry = getDownloadEntry(req.params.id);
+    if (!entry) {
       return res.status(404).json({ error: "Download link has expired or is invalid." });
     }
-    if (!fs.existsSync(filePath)) {
+    if (!fs.existsSync(entry.filePath)) {
       return res.status(404).json({ error: "Report file not found." });
     }
 
-    res.download(filePath, "GSTR2B_Reconciliation.xlsx", (err) => {
+    res.download(entry.filePath, entry.filename, (err) => {
       if (!err) deleteDownloadToken(req.params.id);
     });
   } catch (error) {

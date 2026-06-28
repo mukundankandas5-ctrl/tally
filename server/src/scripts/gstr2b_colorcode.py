@@ -807,5 +807,109 @@ def main():
     build_tally_colored(a.ledger, orig_to_clean, results, parse.get('books_only', []), outdir)
 
 
+# ── JSON stdin/stdout mode (called by gstr2bService.js) ─────────────────────
+# When the script is invoked with no CLI arguments the service communicates via
+# JSON on stdin/stdout, exactly like gstr2b_reconcile.py does.  Any print()
+# calls during processing are redirected to stderr so they appear in server
+# logs without corrupting the JSON result on stdout.
+#
+# Two phases:
+#   normalize  — normalise each original Tally ledger into a clean Format-B
+#                temp file the engine can parse; returns clean paths + mapping
+#   colorcode  — produce the colour-coded GSTR-2B copy and colour-coded Tally
+#                files given finalised reconciliation results
+
+
+def _json_normalize(payload):
+    """normalize phase: ledger_paths, company, output_dir → clean_paths, orig_to_clean."""
+    ledger_paths = payload['ledger_paths']
+    company      = payload.get('company', 'Company')
+    company_name = company if isinstance(company, str) else (company.get('legal_name') or 'Company')
+    output_dir   = payload['output_dir']
+    os.makedirs(output_dir, exist_ok=True)
+
+    clean_paths, tax_types, orig_to_clean, row_counts = [], [], {}, []
+    for i, lp in enumerate(ledger_paths):
+        tax_type, rows = normalize_ledger(lp)
+        cp = os.path.join(output_dir, f'clean_{i}_{tax_type}.xlsx')
+        write_clean_ledger(cp, tax_type, rows, company_name)
+        clean_paths.append(cp)
+        tax_types.append(tax_type)
+        orig_to_clean[lp] = f'clean_{i}_{tax_type}.xlsx'
+        row_counts.append(len(rows))
+
+    return {'clean_paths': clean_paths, 'tax_types': tax_types,
+            'orig_to_clean': orig_to_clean, 'row_counts': row_counts}
+
+
+def _json_colorcode(payload):
+    """colorcode phase: gstr2b_path, ledger_paths, orig_to_clean, results,
+    books_only, output_dir → color_2b_path, tally_paths, verify_ok, warnings."""
+    gstr2b_path   = payload['gstr2b_path']
+    ledger_paths  = payload['ledger_paths']
+    orig_to_clean = payload['orig_to_clean']
+    results       = payload['results']
+    books_only    = payload.get('books_only', [])
+    output_dir    = payload['output_dir']
+    os.makedirs(output_dir, exist_ok=True)
+
+    warnings = []
+
+    # (a) faithful colour-coded copy of the GSTR-2B
+    base_2b       = os.path.splitext(os.path.basename(gstr2b_path))[0]
+    color_2b_path = os.path.join(output_dir, f'{base_2b}_ColorCoded.xlsx')
+    try:
+        problems = build_faithful_colored(gstr2b_path, color_2b_path, results)
+        warnings.extend(problems[:5])
+    except SystemExit as e:
+        return {'error': str(e), 'color_2b_path': None, 'tally_paths': [], 'verify_ok': False, 'warnings': [str(e)]}
+
+    ok, v_lines = verify_output(color_2b_path, gstr2b_path, results)
+    if not ok:
+        warnings.extend([l for l in v_lines if '✗' in l])
+
+    # (b) colour-coded copies of each Tally ledger
+    tally_out = build_tally_colored(ledger_paths, orig_to_clean, results, books_only, output_dir)
+
+    tally_paths = []
+    for i, (lp, tp) in enumerate(zip(ledger_paths, tally_out)):
+        if tp:
+            tally_paths.append({'index': i, 'original_name': os.path.basename(lp), 'path': tp})
+
+    return {
+        'color_2b_path': color_2b_path if os.path.exists(color_2b_path) else None,
+        'tally_paths':   tally_paths,
+        'verify_ok':     ok,
+        'warnings':      warnings,
+    }
+
+
+def main_json():
+    """JSON stdin/stdout entry point used by gstr2bService.js."""
+    real_stdout = sys.stdout
+    sys.stdout  = sys.stderr              # redirect prints → server logs during processing
+    try:
+        payload = json.loads(sys.stdin.read())
+        phase   = payload.get('phase', 'colorcode')
+        if phase == 'normalize':
+            result = _json_normalize(payload)
+        elif phase == 'colorcode':
+            result = _json_colorcode(payload)
+        else:
+            result = {'error': f'Unknown phase: {phase}'}
+    except Exception as e:
+        import traceback as _tb
+        result = {'error': str(e), 'traceback': _tb.format_exc()}
+    finally:
+        sys.stdout = real_stdout
+    sys.stdout.write(json.dumps(result, default=str))
+    sys.stdout.flush()
+
+
 if __name__ == '__main__':
-    main()
+    # No CLI args → JSON mode (called by the Node service)
+    # Args present → standard CLI mode
+    if len(sys.argv) <= 1:
+        main_json()
+    else:
+        main()
