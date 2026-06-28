@@ -45,6 +45,10 @@ Outputs (written next to the GSTR-2B, or `--outdir`):
    All other sheets (B2BA / ECO / IMPG / Read me) are copied through untouched.
 2. `GSTR2B_Reconciliation_<period>.xlsx` — the engine's 5-sheet report (Summary / Matched /
    Unmatched / Not In Books / Others), the proof trail. Skip with `--no-report`.
+3. `<ledger name>_Reconciled.xlsx` (one per `--ledger`) — the original Tally file with
+   unmatched entries (not in GSTR-2B) coloured **red** and partially-matched entries (tax
+   differs) coloured **orange** on the value cell only; matched rows are unchanged. Cell
+   comments explain each flag. These let the accountant chase suppliers directly from the Tally file.
 
 ### Client/period identity guard (automatic — important for multi-client work)
 
@@ -101,6 +105,9 @@ key is found (or `--no-ai`), it uses a deterministic same-supplier rule instead.
 batches of 25; any batch that errors or truncates falls back per-entry to the deterministic
 rule, so a run never breaks. Model defaults to `claude-sonnet-4-6` (override `--model`).
 
-The web app exposes the same engine at `POST /api/reconcile/gstr2b` (5-sheet report only — no
-colour-coded 2B; needs a valid `ANTHROPIC_API_KEY` in `.env`). The script is the way to produce
-the accountant's faithful colour-coded file.
+The web app exposes the same engine at `POST /api/reconcile/gstr2b` and produces **identical
+outputs to the CLI** — 5-sheet report + colour-coded GSTR-2B + colour-coded Tally ledger files
+(one per uploaded ledger). The service normalises ledgers before matching (Format A/B auto-detect
+via `gstr2b_colorcode.py normalize` phase) so colour coding works correctly on both shapes. All
+three output types appear as separate download buttons in the UI after reconciliation completes.
+Requires a valid `ANTHROPIC_API_KEY` in `server/.env`; falls back to deterministic if unavailable.
