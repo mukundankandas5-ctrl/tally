@@ -391,6 +391,139 @@ def build_faithful_colored(src_path, out_path, results):
     return problems
 
 
+def build_tally_colored(ledger_paths, orig_to_clean, results, books_only, outdir):
+    """Write a colour-coded copy of each original Tally ledger file.
+
+    Only unmatched and partially-matched rows are marked — matched rows are left
+    untouched.  The font of the tax-amount cell only is recoloured (not the whole
+    row or cell fill), and a cell comment is added with a plain-English reason:
+
+        red    = in books but NOT found in GSTR-2B (ITC blocked until supplier files)
+        orange = entry IS in GSTR-2B but the booked tax amount differs (needs review)
+
+    orig_to_clean : {original_ledger_path: clean_basename}
+                    e.g. '/path/igst.xlsx' → 'clean_0_IGST.xlsx'
+    results       : parse['results'] after run_generate() — finalised statuses
+    books_only    : parse['books_only'] after run_generate()
+
+    Returns a list of output file paths (one per input ledger).
+    """
+    from openpyxl.comments import Comment as _Comment
+
+    def _dk(v):
+        """Date → '%d/%m/%Y' string (mirrors to_date_str in the engine)."""
+        if v is None: return ''
+        if isinstance(v, (datetime, date)): return v.strftime('%d/%m/%Y')
+        return str(v).strip()
+
+    # Build lookup: (clean_basename, date_str, normed_party, amount) → (rgb, annotation)
+    # Partially matched: same supplier/bill but tax amount differs
+    status_lut = {}
+    for r in results:
+        if r.get('status') == 'unmatched' and r.get('books_ledger'):
+            key = (
+                r['books_ledger'],
+                r.get('books_date') or '',
+                recon.norm(r.get('books_party') or ''),
+                _num(r.get('books_tax') or 0),
+            )
+            diff = r.get('tax_diff', 0) or 0
+            inv  = r.get('invoice_no', '')
+            ann  = (f"Partially matched with GSTR-2B invoice {inv}\n"
+                    f"Tax amount differs by ₹{diff:,.2f} — verify with supplier invoice")
+            status_lut[key] = (FONT_ORANGE, ann)
+
+    # Books-only: in Tally but no corresponding entry in GSTR-2B
+    for b in books_only:
+        key = (
+            b.get('ledger', ''),
+            b.get('date') or '',
+            recon.norm(b.get('party') or ''),
+            _num(b.get('tax_amount') or 0),
+        )
+        ann = ("In books but not found in GSTR-2B\n"
+               "Chase supplier to file GSTR-1 — ITC is blocked until the invoice appears in GSTR-2B")
+        if key not in status_lut:
+            status_lut[key] = (FONT_RED, ann)
+
+    out_paths = []
+    for orig_path in ledger_paths:
+        clean_base = orig_to_clean.get(orig_path, '')
+        if not clean_base:
+            print(f"  ⚠ no clean-file mapping for {os.path.basename(orig_path)}, skipping tally colour")
+            continue
+
+        wb  = load_workbook(orig_path)
+        ws  = wb.active
+        vals = list(ws.iter_rows(values_only=True))
+
+        # Detect header row (same logic as normalize_ledger)
+        hi = None
+        for idx, r in enumerate(vals[:25]):
+            rv = [_s(c).upper() for c in (r or [])]
+            if any(v == 'DATE' for v in rv) and any(
+                    'PARTICULARS' in v or 'TAX' in v or v == 'DEBIT' for v in rv):
+                hi = idx; break
+        if hi is None:
+            print(f"  ⚠ could not find header row in {os.path.basename(orig_path)}, skipping tally colour")
+            out_paths.append(None); continue
+
+        hdr = [_s(c).upper() for c in (vals[hi] or [])]
+
+        def _ci(pred, _h=hdr):
+            for i, h in enumerate(_h):
+                if pred(h): return i
+            return None
+
+        date_c   = _ci(lambda h: h == 'DATE')
+        part_c   = _ci(lambda h: 'PARTICULARS' in h)
+        debit_c  = _ci(lambda h: h == 'DEBIT')
+        if part_c is None: part_c = 1
+        if date_c is None: date_c = 0
+        amount_c = debit_c
+        if amount_c is None:
+            amount_c = _ci(lambda h: any(k in h for k in ('TAX', 'AMOUNT', 'INPUT')) and 'TYPE' not in h)
+            if amount_c is None: amount_c = len(hdr) - 1
+
+        n_colored = 0
+        for row_1 in range(hi + 2, ws.max_row + 1):   # 1-based, data rows after header
+            r_v = vals[row_1 - 1]
+            if not r_v or not any(r_v): continue
+
+            marker = _s(r_v[part_c] if part_c < len(r_v) else '')
+            nxt    = _s(r_v[part_c + 1] if part_c + 1 < len(r_v) else '')
+            party  = nxt if marker.upper() in ('TO', 'BY') and nxt else marker
+            up = party.upper()
+            if not party or any(k in up for k in SKIP_PARTY): continue
+
+            amt = _num(r_v[amount_c] if amount_c < len(r_v) else 0)
+            if amt <= 0: continue
+
+            lut_key = (clean_base, _dk(r_v[date_c] if date_c < len(r_v) else None),
+                       recon.norm(party), amt)
+            hit = status_lut.get(lut_key)
+            if not hit:
+                continue
+
+            rgb, annotation = hit
+            cell = ws.cell(row=row_1, column=amount_c + 1)
+            f = cell.font
+            cell.font = Font(name=f.name or 'Calibri', size=f.size, bold=f.bold,
+                             italic=f.italic, vertAlign=f.vertAlign, underline=f.underline,
+                             strike=f.strike, color=rgb)
+            cell.comment = _Comment(annotation, "GSTR-2B Reconciliation")
+            n_colored += 1
+
+        base_name = os.path.splitext(os.path.basename(orig_path))[0]
+        out_path  = os.path.join(outdir, f"{base_name}_Reconciled.xlsx")
+        wb.save(out_path)
+        make_numbers_compatible(out_path)
+        out_paths.append(out_path)
+        print(f"  tally   -> {out_path}  ({n_colored} row(s) coloured — red/orange only; matched rows unchanged)")
+
+    return out_paths
+
+
 def verify_output(out_path, src_path, results):
     """Second, INDEPENDENT pass (the "check twice" step). Returns (ok, [lines]).
     Confirms: (a) the written file is a faithful copy of the source 2B — same
@@ -609,12 +742,14 @@ def main():
 
     # 1) normalise ledgers → clean Format-B temp files the engine reads cleanly
     clean_paths = []
+    orig_to_clean = {}                        # original path → clean basename (for tally colour step)
     tmp = tempfile.mkdtemp(prefix='gstr2b_')
     for i, lp in enumerate(a.ledger):
         tax_type, rows = normalize_ledger(lp)
         cp = os.path.join(tmp, f'clean_{i}_{tax_type}.xlsx')
         write_clean_ledger(cp, tax_type, rows, company['legal_name'] or 'Company')
         clean_paths.append(cp)
+        orig_to_clean[lp] = f'clean_{i}_{tax_type}.xlsx'
         print(f"  ledger {os.path.basename(lp)} -> {tax_type}: {len(rows)} rows, Rs.{sum(r[2] for r in rows):,.2f}")
 
     # 2) engine: parse + tier-2.5 review (Claude when a key is available, else deterministic)
@@ -664,6 +799,12 @@ def main():
     if problems or not ok:
         sys.exit("  ✗ VERIFICATION FAILED — output is not trustworthy; do not deliver (see lines above)")
     print("  ✓ verified twice: faithful copy, tax-figure colours correct, totals tie out")
+
+    # 5) colour-coded Tally ledger files — unmatched rows = red, partial matches = orange,
+    #    matched rows left untouched.  Only the tax-amount cell is recoloured; a cell
+    #    comment explains whether the entry is missing from GSTR-2B or has a tax mismatch.
+    print("  building colour-coded Tally ledger file(s)...")
+    build_tally_colored(a.ledger, orig_to_clean, results, parse.get('books_only', []), outdir)
 
 
 if __name__ == '__main__':
